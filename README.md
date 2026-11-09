@@ -1,0 +1,74 @@
+# video-compress
+
+A Bash script for compressing videos with FFmpeg, one file at a time. Supports single files, directories, optional recursion, and a final per-file size report.
+
+**Successful compression deletes the original file. Keep backups.** The output must pass metadata validation and save at least 20% before the original is deleted. Validation does not decode every frame or guarantee that the output is free of corruption.
+
+## Requirements
+
+Currently supports macOS. Requires Bash, FFmpeg, and ffprobe. Tested with FFmpeg 8.
+
+```bash
+brew install ffmpeg git
+```
+
+Linux is not supported yet because file-size checks use macOS `stat` syntax. Linux hardware acceleration is not implemented.
+
+## Install
+
+```bash
+mkdir -p "$HOME/.local/share" "$HOME/.local/bin"
+git clone https://github.com/daussho/video-compress.git \
+  "$HOME/.local/share/video-compress"
+ln -s "$HOME/.local/share/video-compress/compress.sh" \
+  "$HOME/.local/bin/vcompress"
+```
+
+Make sure `$HOME/.local/bin` is in your `PATH`. If needed, add this line to your shell configuration, such as `~/.zshrc` or `~/.bashrc`, and restart the shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+You can also run `./compress.sh` directly from the cloned repository.
+
+## Usage
+
+```bash
+# Compress one file.
+vcompress "/path/to/video.mp4"
+
+# Process videos directly inside a directory.
+vcompress "/path/to/videos"
+
+# Include subdirectories.
+vcompress --recursive "/path/to/videos"
+```
+
+Directory mode recognizes `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.avi`, `.mpg`, `.mpeg`, `.ts`, `.mts`, and `.m2ts`, case-insensitively. Files are processed sequentially in filesystem traversal order, without explicit sorting. Symlink files are not processed.
+
+Failures do not stop the batch. The final table lists each video's status, original size, output size, and percentage saved. Sizes are in MiB. The command exits nonzero if any file fails.
+
+## Compression rules
+
+- Skip files smaller than 50 MiB. Exactly 50 MiB is eligible.
+- Skip video bitrates at or below 600 kb/s, or unknown video bitrates.
+- Skip generated `_out` and `.part` files, and files with an existing valid output.
+- Downscale videos taller than 480 pixels to 480 pixels high. Smaller videos are not upscaled.
+- Cap frame rate at 30 fps. Lower frame rates are preserved.
+- Encode the first video stream as H.264 and copy the first audio stream, if present. Other streams are not included.
+- Use Apple VideoToolbox hardware decoding, scaling, and encoding when its encoder is available, targeting 600 kb/s video. Otherwise, use software `libx264` with `ultrafast` and CRF 28.
+
+For hardware encoding, estimated output size uses duration, the 600 kb/s video target, and the copied audio bitrate. Estimated savings below 20% skip encoding. Missing estimation metadata and software CRF encoding use only the final-size check.
+
+After encoding, actual savings must reach 20%. Otherwise, the temporary output is discarded and the original is kept. Accepted output is saved beside the original as `<name>_out.mp4`, then the original is deleted. Failed encodes may leave `<name>_out.part.mp4` for inspection.
+
+Encoding is lossy. Frame-rate reduction, downscaling, and the low video bitrate can visibly reduce quality. Copied audio must be compatible with MP4 or encoding will fail. Hardware failures do not automatically retry in software.
+
+## Update
+
+```bash
+git -C "$HOME/.local/share/video-compress" pull --ff-only
+```
+
+The installed symlink uses the updated script immediately. A built-in `--update` option is not implemented yet.
