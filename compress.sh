@@ -2,6 +2,14 @@
 set -e
 
 min_savings=20
+platform=$(uname -s)
+file_size() {
+  case "$platform" in
+    Darwin) stat -f%z "$1" ;;
+    Linux) stat -c%s -- "$1" ;;
+    *) echo "Unsupported operating system: $platform" >&2; return 1 ;;
+  esac
+}
 recursive=false
 target=
 for arg in "$@"; do
@@ -27,7 +35,7 @@ for tool in ffmpeg ffprobe; do
   command -v "$tool" >/dev/null || { echo "Missing command: $tool" >&2; exit 1; }
 done
 hardware=false
-if ffmpeg -encoders 2>/dev/null | grep -q h264_videotoolbox; then
+if [[ "$platform" == Darwin ]] && ffmpeg -encoders 2>/dev/null | grep -q h264_videotoolbox; then
   hardware=true
 fi
 
@@ -59,7 +67,7 @@ compress_video() (
   fi
 
   start=$(date +%s)
-  source_size=$(stat -f%z "$f") || return 1
+  source_size=$(file_size "$f") || return 1
   if (( source_size == 0 )); then
     echo "Error: empty input: $f" >&2
     return 1
@@ -135,7 +143,7 @@ compress_video() (
     echo "Error: incomplete output retained at $part" >&2
     return 1
   fi
-  output_size=$(stat -f%z "$part") || return 1
+  output_size=$(file_size "$part") || return 1
   if (( output_size * 100 > source_size * (100 - min_savings) )); then
     rm -- "$part" || return 1
     echo "Skipped: actual savings below ${min_savings}%, original kept: $f"
@@ -162,7 +170,7 @@ failed=0
 rows=()
 process_file() {
   local file="$1" before after status label saved display
-  before=$(stat -f%z "$file" 2>/dev/null) || before=
+  before=$(file_size "$file" 2>/dev/null) || before=
   if compress_video "$file"; then
     status=0
     label=compressed
@@ -179,7 +187,7 @@ process_file() {
   fi
   after=
   if [[ "$status" != 1 && -f "${file%.*}_out.mp4" ]]; then
-    after=$(stat -f%z "${file%.*}_out.mp4" 2>/dev/null) || after=
+    after=$(file_size "${file%.*}_out.mp4" 2>/dev/null) || after=
   fi
   saved=-
   if [[ -n "$before" && -n "$after" ]] && (( before > 0 )); then

@@ -6,22 +6,26 @@ A Bash script for compressing videos with FFmpeg, one file at a time. Supports s
 
 ## Requirements
 
-Currently supports macOS. Requires Bash, FFmpeg, and ffprobe. Tested with FFmpeg 8.
+Supports macOS and Ubuntu, including Kubuntu. Requires Bash, Git, FFmpeg, and ffprobe. macOS uses VideoToolbox when available; Ubuntu currently uses software encoding.
 
 ```bash
-brew install ffmpeg git
+# macOS, requires Homebrew from https://brew.sh
+brew install git
+
+# Ubuntu / Kubuntu
+sudo apt update
+sudo apt install git
 ```
 
-Linux is not supported yet because file-size checks use macOS `stat` syntax. Linux hardware acceleration is not implemented.
+The installer installs missing FFmpeg dependencies using Homebrew or apt. Ubuntu installation may request your sudo password. Linux hardware acceleration is not implemented.
 
 ## Install
 
 ```bash
-mkdir -p "$HOME/.local/share" "$HOME/.local/bin"
+mkdir -p "$HOME/.local/share"
 git clone https://github.com/daussho/video-compress.git \
   "$HOME/.local/share/video-compress"
-ln -s "$HOME/.local/share/video-compress/compress.sh" \
-  "$HOME/.local/bin/vcompress"
+bash "$HOME/.local/share/video-compress/install.sh"
 ```
 
 Make sure `$HOME/.local/bin` is in your `PATH`. If needed, add this line to your shell configuration, such as `~/.zshrc` or `~/.bashrc`, and restart the shell:
@@ -30,7 +34,7 @@ Make sure `$HOME/.local/bin` is in your `PATH`. If needed, add this line to your
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-You can also run `./compress.sh` directly from the cloned repository.
+You can also clone anywhere and run `bash install.sh` there. It links `vcompress` to that checkout, so keep the checkout in place. Rerunning the installer is safe; it refuses to overwrite an unrelated command. You can also run `./compress.sh` directly.
 
 ## Usage
 
@@ -72,3 +76,5 @@ git -C "$HOME/.local/share/video-compress" pull --ff-only
 ```
 
 The installed symlink uses the updated script immediately. A built-in `--update` option is not implemented yet.
+
+If you cloned elsewhere, run `git pull --ff-only` in that checkout instead.
