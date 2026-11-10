@@ -98,6 +98,19 @@ case ":$PATH:" in
     ;;
 esac
 echo 'Usage: vcompress --recursive "/path/to/videos"'
+if [[ -f "$source_dir/completions/vcompress.bash" && -f "$source_dir/completions/vcompress.zsh" ]]; then
+  case "${SHELL:-}" in
+    */zsh)
+      echo 'For Tab completion, run these lines and add them to ~/.zshrc:'
+      echo 'autoload -Uz compinit; (( $+functions[compdef] )) || compinit'
+      printf 'source %q\n' "$source_dir/completions/vcompress.zsh"
+      ;;
+    *)
+      echo 'For Bash Tab completion, run this line and add it to ~/.bashrc:'
+      printf 'source %q\n' "$source_dir/completions/vcompress.bash"
+      ;;
+  esac
+fi
 }
 
 install_vcompress "$@"

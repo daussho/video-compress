@@ -51,6 +51,26 @@ Directory mode recognizes `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.avi`, `.mpg
 
 Failures do not stop the batch. The final table lists each video's status, original size, output size, and percentage saved. Sizes are in MiB. The command exits nonzero if any file fails.
 
+## Tab completion
+
+Complete `vcompress --rec` to `--recursive`, or `--up` to `--update`, by pressing Tab. Normal file and directory completion is preserved.
+
+For Zsh, run these lines now and add them to `~/.zshrc`, after any shell framework initialization:
+
+```zsh
+autoload -Uz compinit
+(( $+functions[compdef] )) || compinit
+source "$HOME/.local/share/video-compress/completions/vcompress.zsh"
+```
+
+For Bash, run this line now and add it to `~/.bashrc`:
+
+```bash
+source "$HOME/.local/share/video-compress/completions/vcompress.bash"
+```
+
+If your macOS Bash login shell does not load `~/.bashrc`, put the source line in `~/.bash_profile` instead. For custom checkouts, replace the repository path above. The installer prints the command for its actual checkout; it does not edit shell configuration files. After self-updating completion files, restart the shell or source them again.
+
 ## Compression rules
 
 - Skip files smaller than 50 MiB. Exactly 50 MiB is eligible.

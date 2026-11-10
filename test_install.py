@@ -20,6 +20,7 @@ class InstallTests(unittest.TestCase):
         for name in ("install.sh", "compress.sh"):
             shutil.copyfile(ROOT / name, self.checkout / name)
             (self.checkout / name).chmod(0o755)
+        shutil.copytree(ROOT / "completions", self.checkout / "completions")
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for tool in ("dirname", "readlink", "mkdir", "ln"):
@@ -69,6 +70,7 @@ if args[0] == "clone":
     (target / ".git").mkdir()
     (target / ".git/origin").write_text(args[1])
     shutil.copy2(pathlib.Path(os.environ["MOCK_CHECKOUT"]) / "compress.sh", target / "compress.sh")
+    shutil.copytree(pathlib.Path(os.environ["MOCK_CHECKOUT"]) / "completions", target / "completions")
 elif args[0] == "-C":
     print((pathlib.Path(args[1]) / ".git/origin").read_text())
 else:
@@ -136,6 +138,17 @@ if IFS= read -r unexpected; then exit 1; fi
             self.assertEqual(link.resolve(), (self.checkout / "compress.sh").resolve())
             self.assertIn('export PATH="$HOME/.local/bin:$PATH"', result.stdout)
         self.assertFalse((self.root / "log").exists())
+
+    def test_completion_activation_instructions(self):
+        for shell, completion in (("/bin/zsh", "vcompress.zsh"), ("/bin/bash", "vcompress.bash")):
+            with self.subTest(shell=shell):
+                self.env["SHELL"] = shell
+                result = self.install()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(completion, result.stdout)
+                self.assertIn("source ", result.stdout)
+        self.assertFalse((Path(self.env["HOME"]) / ".zshrc").exists())
+        self.assertFalse((Path(self.env["HOME"]) / ".bashrc").exists())
 
     def test_macos_installs_missing_ffmpeg(self):
         (self.bin / "ffprobe").unlink()
