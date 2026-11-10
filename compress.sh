@@ -40,10 +40,12 @@ file_size() {
   esac
 }
 recursive=false
+verbose=false
 target=
 for arg in "$@"; do
   case "$arg" in
     --recursive) recursive=true ;;
+    --verbose) verbose=true ;;
     -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *)
       if [[ -n "$target" ]]; then
@@ -55,7 +57,7 @@ for arg in "$@"; do
   esac
 done
 if [[ -z "$target" || ! -e "$target" ]]; then
-  echo "Usage: $0 [--recursive] <video-file-or-directory> | --update" >&2
+  echo "Usage: $0 [--recursive] [--verbose] <video-file-or-directory> | --update" >&2
   exit 1
 fi
 # Keep relative filenames from being interpreted as command options.
@@ -67,6 +69,11 @@ hardware=false
 if [[ "$platform" == Darwin ]] && ffmpeg -encoders 2>/dev/null | grep -q h264_videotoolbox; then
   hardware=true
 fi
+ffmpeg_log=(-hide_banner -loglevel error -stats)
+if "$verbose"; then ffmpeg_log=(); fi
+detail() {
+  if "$verbose"; then printf '%s\n' "$*"; fi
+}
 
 valid_video() {
   local codec
@@ -137,31 +144,32 @@ compress_video() (
         awk -v d="$duration" 'BEGIN {exit !(d > 0)}'; then
         estimated_savings=$(awk -v d="$duration" -v a="$audio_bitrate" -v size="$source_size" \
           'BEGIN {printf "%.1f", (1 - d * (600000 + a) / 8 / size) * 100}')
-        echo "Estimated savings: ${estimated_savings}%: $f"
+        detail "Estimated savings: ${estimated_savings}%: $f"
         if awk -v d="$duration" -v a="$audio_bitrate" -v size="$source_size" -v min="$min_savings" \
           'BEGIN {exit !(d * (600000 + a) / 8 > size * (100 - min) / 100)}'; then
           echo "Skipped: estimated savings below ${min_savings}%: $f"
           return 2
         fi
       else
-        echo "Estimate unavailable, will check actual savings: $f"
+        detail "Estimate unavailable, will check actual savings: $f"
       fi
     else
-      echo "Estimate unavailable, will check actual savings: $f"
+      detail "Estimate unavailable, will check actual savings: $f"
     fi
   fi
 
   filters=()
+  printf 'Compressing: %s\n' "$f"
   if "$hardware"; then
     (( height <= 480 )) || filters=(-vf "scale_vt=-2:480")
-    if ! ffmpeg -nostdin -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
+    if ! ffmpeg "${ffmpeg_log[@]}" -nostdin -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_videotoolbox -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
       echo "Error: compression failed: $f" >&2
       return 1
     fi
   else
     (( height <= 480 )) || filters=(-vf "scale=-2:480")
-    if ! ffmpeg -nostdin -y -i "$f" -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset ultrafast -crf 28 -fpsmax 30 \
+    if ! ffmpeg "${ffmpeg_log[@]}" -nostdin -y -i "$f" -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset ultrafast -crf 28 -fpsmax 30 \
       "${filters[@]}" -c:a copy "$part"; then
       echo "Error: compression failed: $f" >&2
       return 1
@@ -184,13 +192,15 @@ compress_video() (
   mv -- "$part" "$out" || return 1
   rm -- "$f" || return 1
   elapsed=$(( $(date +%s) - start ))
-  echo "→ $out"
-  echo "Source: ${width}x${height}, $(awk -v b="$source_size" 'BEGIN {printf "%.1f MB", b / 1048576}')"
-  echo "Output: ${output_width}x${output_height}, $(awk -v b="$output_size" 'BEGIN {printf "%.1f MB", b / 1048576}')"
-  echo "Video bitrate: ${output_bitrate:-unknown} bps"
-  echo "Size change: $(awk -v old="$source_size" -v new="$output_size" 'BEGIN {printf "%.1f%%", (new / old - 1) * 100}')"
-  echo "Elapsed: ${elapsed}s"
-  echo "Deleted original: $f"
+  if "$verbose"; then
+    echo "→ $out"
+    echo "Source: ${width}x${height}, $(awk -v b="$source_size" 'BEGIN {printf "%.1f MB", b / 1048576}')"
+    echo "Output: ${output_width}x${output_height}, $(awk -v b="$output_size" 'BEGIN {printf "%.1f MB", b / 1048576}')"
+    echo "Video bitrate: ${output_bitrate:-unknown} bps"
+    echo "Size change: $(awk -v old="$source_size" -v new="$output_size" 'BEGIN {printf "%.1f%%", (new / old - 1) * 100}')"
+    echo "Elapsed: ${elapsed}s"
+    echo "Deleted original: $f"
+  fi
 )
 
 compressed=0

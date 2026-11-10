@@ -218,6 +218,71 @@ print(pathlib.Path(sys.argv[3]).stat().st_size)
         self.assertNotIn("unexpected ffmpeg", result.stderr)
         self.assertEqual(source.read_bytes(), b"untouched")
 
+    def prepare_compression_output_test(self):
+        self.env["PLATFORM"] = "Darwin" if sys.platform == "darwin" else "Linux"
+        for name in ("stat", "date", "awk", "mv", "rm", "grep"):
+            (self.bin / name).symlink_to(shutil.which(name))
+        self.tool("ffprobe", '''case "$*" in
+  *stream=codec_type*) ;;
+  *format=duration*) echo 100 ;;
+  *stream=codec_name*) echo h264 ;;
+  *) echo '1920,1080,3000000' ;;
+esac''')
+        self.tool("ffmpeg", '''if [[ "$1" == -encoders ]]; then echo h264_videotoolbox; exit 0; fi
+echo "$*" >> "$LOG"
+case " $* " in
+  *" -loglevel error "*) echo 'compact progress' >&2 ;;
+  *) echo 'ffmpeg version test' >&2; echo 'Stream mapping:' >&2 ;;
+esac
+if [[ "$FAIL_ENCODE" == 1 ]]; then echo 'Encoder failed' >&2; exit 1; fi
+for last; do :; done
+printf video > "$last"''')
+
+    def run_compression_output_test(self, name, *flags):
+        source = self.root / (name + ".mp4")
+        with source.open("wb") as fixture:
+            fixture.truncate(70 * 1024 * 1024)
+        result = subprocess.run(["/bin/bash", str(self.checkout / "compress.sh"), str(source), *flags],
+                                env=self.env, capture_output=True, text=True)
+        return source, result
+
+    def test_concise_output_by_default(self):
+        self.prepare_compression_output_test()
+        source, result = self.run_compression_output_test("quiet")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(source.exists())
+        self.assertIn("Compressing:", result.stdout)
+        self.assertIn("compact progress", result.stderr)
+        self.assertIn("Summary: 1 compressed", result.stdout)
+        self.assertNotIn("ffmpeg version", result.stderr)
+        self.assertNotIn("Stream mapping", result.stderr)
+        self.assertNotIn("Estimated savings", result.stdout)
+        self.assertNotIn("Deleted original", result.stdout)
+        self.assertIn("-hide_banner -loglevel error -stats", (self.root / "log").read_text())
+
+    def test_verbose_output_restores_details(self):
+        self.prepare_compression_output_test()
+        source, result = self.run_compression_output_test("verbose", "--verbose")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(source.exists())
+        self.assertIn("ffmpeg version", result.stderr)
+        self.assertIn("Stream mapping", result.stderr)
+        self.assertIn("Deleted original", result.stdout)
+        self.assertIn("Elapsed:", result.stdout)
+        self.assertNotIn("-loglevel error", (self.root / "log").read_text())
+
+    def test_errors_remain_visible_in_both_modes(self):
+        self.prepare_compression_output_test()
+        self.env["FAIL_ENCODE"] = "1"
+        for flags in ((), ("--verbose",)):
+            with self.subTest(flags=flags):
+                source, result = self.run_compression_output_test("failure", *flags)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(source.exists())
+                self.assertIn("Encoder failed", result.stderr)
+                self.assertIn("compression failed", result.stderr)
+                self.assertIn("Summary: 0 compressed, 0 skipped, 1 failed", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

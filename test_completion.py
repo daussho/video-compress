@@ -11,7 +11,8 @@ class CompletionTests(unittest.TestCase):
     def test_bash_flag_prefixes_and_filename_fallback(self):
         for shell in dict.fromkeys(("/bin/bash", shutil.which("bash"))):
             for prefix, expected in (("--rec", "--recursive"), ("--up", "--update"),
-                                     ("--", "--recursive\n--update"), ("file name", ""),
+                                     ("--ver", "--verbose"),
+                                     ("--", "--recursive\n--update\n--verbose"), ("file name", ""),
                                      ("--unknown", ""), ("", "")):
                 with self.subTest(shell=shell, prefix=prefix):
                     result = subprocess.run([shell, "-c", '''
@@ -41,6 +42,7 @@ _vcompress
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--recursive[", result.stdout)
         self.assertIn("--update[", result.stdout)
+        self.assertIn("--verbose[", result.stdout)
         self.assertIn(":_files", result.stdout)
 
 

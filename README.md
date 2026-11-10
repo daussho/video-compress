@@ -45,15 +45,20 @@ vcompress "/path/to/videos"
 
 # Include subdirectories.
 vcompress --recursive "/path/to/videos"
+
+# Show full FFmpeg logs and detailed per-file statistics.
+vcompress --verbose "/path/to/video.mp4"
 ```
 
 Directory mode recognizes `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.avi`, `.mpg`, `.mpeg`, `.ts`, `.mts`, and `.m2ts`, case-insensitively. Files are processed sequentially in filesystem traversal order, without explicit sorting. Symlink files are not processed.
+
+By default, output shows the current file, compact FFmpeg progress, skip/error messages, and the final size table. Use `--verbose` to include the FFmpeg banner, stream metadata, savings estimates, and detailed per-file statistics. Errors remain visible in both modes.
 
 Failures do not stop the batch. The final table lists each video's status, original size, output size, and percentage saved. Sizes are in MiB. The command exits nonzero if any file fails.
 
 ## Tab completion
 
-Complete `vcompress --rec` to `--recursive`, or `--up` to `--update`, by pressing Tab. Normal file and directory completion is preserved.
+Complete `vcompress --rec` to `--recursive`, `--up` to `--update`, or `--ver` to `--verbose`, by pressing Tab. Normal file and directory completion is preserved.
 
 For Zsh, run these lines now and add them to `~/.zshrc`, after any shell framework initialization:
 
