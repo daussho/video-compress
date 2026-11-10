@@ -6,9 +6,11 @@ A Bash script for compressing videos with FFmpeg, one file at a time. Supports s
 
 ## Requirements
 
-Supports macOS and Ubuntu, including Kubuntu. Requires Bash, Git, FFmpeg, and ffprobe. macOS uses VideoToolbox when available; Ubuntu currently uses software encoding.
+Supports macOS and Ubuntu, including Kubuntu. Requires Bash, Git, FFmpeg, and ffprobe. macOS uses VideoToolbox when available; Linux automatically uses VA-API GPU encoding when a working device is found (including Intel Alder Lake-N graphics).
 
-The installer installs missing Git and FFmpeg dependencies using Homebrew or apt. On macOS, install Homebrew from https://brew.sh first if dependencies are missing. Ubuntu installation may request your sudo password. Linux hardware acceleration is not implemented.
+The installer installs missing Git and FFmpeg dependencies using Homebrew or apt. On macOS, install Homebrew from https://brew.sh first if dependencies are missing. Ubuntu installation may request your sudo password.
+
+Linux GPU encoding requires FFmpeg with `h264_vaapi`, a working VA-API driver, and read/write access to a `/dev/dri/renderD*` device. On Ubuntu, Intel GPUs typically need `intel-media-va-driver` (install with `sudo apt install intel-media-va-driver` if missing). A one-frame GPU encoding/scaling check selects the first working device; otherwise the script uses software encoding. The selected encoder is printed at startup. To select a particular device, set `VCOMPRESS_VAAPI_DEVICE=/dev/dri/renderD128`.
 
 ## Install
 
@@ -84,7 +86,7 @@ If your macOS Bash login shell does not load `~/.bashrc`, put the source line in
 - Downscale videos taller than 480 pixels to 480 pixels high. Smaller videos are not upscaled.
 - Cap frame rate at 30 fps. Lower frame rates are preserved.
 - Encode the first video stream as H.264 and copy the first audio stream, if present. Other streams are not included.
-- Use Apple VideoToolbox hardware decoding, scaling, and encoding when its encoder is available, targeting 600 kb/s video. Otherwise, use software `libx264` with `ultrafast` and CRF 28.
+- Use Apple VideoToolbox hardware decoding, scaling, and encoding when its encoder is available, targeting 600 kb/s video. On Linux, use VA-API hardware scaling and H.264 encoding at 600 kb/s when the startup check succeeds; decoding remains on the CPU for input compatibility. Otherwise, use software `libx264` with `ultrafast` and CRF 28.
 
 For hardware encoding, estimated output size uses duration, the 600 kb/s video target, and the copied audio bitrate. Estimated savings below 20% skip encoding. Missing estimation metadata and software CRF encoding use only the final-size check.
 
