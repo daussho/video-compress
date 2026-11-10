@@ -49,6 +49,72 @@ fi''')
         return subprocess.run(["/bin/bash", str(self.checkout / "install.sh")],
                               env=self.env, capture_output=True, text=True)
 
+    def piped_install(self):
+        return subprocess.run(["/bin/bash"], input=(self.checkout / "install.sh").read_text(),
+                              env=self.env, capture_output=True, text=True)
+
+    def mock_clone(self):
+        self.env["MOCK_CHECKOUT"] = str(self.checkout)
+        git = self.bin / "git"
+        git.write_text(f'''#!{sys.executable}
+import os, pathlib, shutil, sys
+args = sys.argv[1:]
+with open(os.environ["LOG"], "a") as log:
+    log.write("git " + " ".join(args) + "\\n")
+if args[0] == "clone":
+    if os.environ.get("CLONE_FAIL"):
+        sys.exit(1)
+    target = pathlib.Path(args[2])
+    target.mkdir()
+    (target / ".git").mkdir()
+    (target / ".git/origin").write_text(args[1])
+    shutil.copy2(pathlib.Path(os.environ["MOCK_CHECKOUT"]) / "compress.sh", target / "compress.sh")
+elif args[0] == "-C":
+    print((pathlib.Path(args[1]) / ".git/origin").read_text())
+else:
+    sys.exit(1)
+''')
+        git.chmod(0o755)
+
+    def test_piped_install_and_rerun(self):
+        self.mock_clone()
+        for platform in ("Darwin", "Linux"):
+            self.env["PLATFORM"] = platform
+            result = self.piped_install()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            home = Path(self.env["HOME"])
+            self.assertEqual((home / ".local/bin/vcompress").resolve(),
+                             (home / ".local/share/video-compress/compress.sh").resolve())
+        self.assertEqual((self.root / "log").read_text().count("git clone "), 1)
+
+    def test_piped_install_rejects_unrelated_checkout(self):
+        self.mock_clone()
+        target = Path(self.env["HOME"]) / ".local/share/video-compress"
+        (target / ".git").mkdir(parents=True)
+        (target / ".git/origin").write_text("https://example.invalid/other.git")
+        result = self.piped_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("different repository", result.stderr)
+        self.assertFalse((Path(self.env["HOME"]) / ".local/bin/vcompress").exists())
+
+    def test_piped_clone_failure(self):
+        self.mock_clone()
+        self.env["CLONE_FAIL"] = "1"
+        result = self.piped_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((Path(self.env["HOME"]) / ".local/bin/vcompress").exists())
+
+    def test_piped_install_can_install_git(self):
+        self.mock_clone()
+        (self.bin / "git").rename(self.root / "git-template")
+        self.env["GIT_TEMPLATE"] = str(self.root / "git-template")
+        self.tool("brew", '''echo "brew $*" >> "$LOG"
+if IFS= read -r unexpected; then exit 1; fi
+/bin/cp "$GIT_TEMPLATE" "$MOCK_BIN/git"''')
+        result = self.piped_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("brew install git", (self.root / "log").read_text())
+
     def test_install_and_rerun(self):
         for platform in ("Darwin", "Linux"):
             self.env["PLATFORM"] = platform

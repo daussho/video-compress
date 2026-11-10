@@ -8,25 +8,23 @@ A Bash script for compressing videos with FFmpeg, one file at a time. Supports s
 
 Supports macOS and Ubuntu, including Kubuntu. Requires Bash, Git, FFmpeg, and ffprobe. macOS uses VideoToolbox when available; Ubuntu currently uses software encoding.
 
-```bash
-# macOS, requires Homebrew from https://brew.sh
-brew install git
-
-# Ubuntu / Kubuntu
-sudo apt update
-sudo apt install git
-```
-
-The installer installs missing FFmpeg dependencies using Homebrew or apt. Ubuntu installation may request your sudo password. Linux hardware acceleration is not implemented.
+The installer installs missing Git and FFmpeg dependencies using Homebrew or apt. On macOS, install Homebrew from https://brew.sh first if dependencies are missing. Ubuntu installation may request your sudo password. Linux hardware acceleration is not implemented.
 
 ## Install
 
 ```bash
-mkdir -p "$HOME/.local/share"
-git clone https://github.com/daussho/video-compress.git \
-  "$HOME/.local/share/video-compress"
-bash "$HOME/.local/share/video-compress/install.sh"
+curl -fsSL https://raw.githubusercontent.com/daussho/video-compress/main/install.sh | bash
 ```
+
+This executes code downloaded from GitHub. To inspect it first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/daussho/video-compress/main/install.sh -o install.sh
+less install.sh
+bash < install.sh
+```
+
+The piped installer clones into `$HOME/.local/share/video-compress` and links `$HOME/.local/bin/vcompress` to it. Rerunning reuses that checkout without updating it. An existing checkout from a different repository or an unrelated `vcompress` command is not overwritten. Ubuntu systems without curl can install it with `sudo apt install curl` first.
 
 Make sure `$HOME/.local/bin` is in your `PATH`. If needed, add this line to your shell configuration, such as `~/.zshrc` or `~/.bashrc`, and restart the shell:
 
@@ -34,7 +32,7 @@ Make sure `$HOME/.local/bin` is in your `PATH`. If needed, add this line to your
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-You can also clone anywhere and run `bash install.sh` there. It links `vcompress` to that checkout, so keep the checkout in place. Rerunning the installer is safe; it refuses to overwrite an unrelated command. You can also run `./compress.sh` directly.
+You can also clone anywhere and run `bash install.sh` there. It links `vcompress` to that checkout, so keep the checkout in place. You can also run `./compress.sh` directly.
 
 ## Usage
 
