@@ -257,17 +257,24 @@ skipped=0
 failed=0
 candidates=0
 rows=()
+active_file=
 process_file() {
   local file="$1" before after status label saved display
   estimated_size=
   estimated_savings=
   before=$(file_size "$file" 2>/dev/null) || before=
+  display="${file//$'\n'/\\n}"
+  display="${display//$'\r'/\\r}"
+  display="${display//$'\t'/\\t}"
+  active_file="$display"
   if compress_video "$file"; then
+    active_file=
     status=0
     label=compressed
     compressed=$((compressed + 1))
   else
     status=$?
+    active_file=
     if [[ "$status" == 3 ]]; then
       label=candidate
       candidates=$((candidates + 1))
@@ -291,17 +298,14 @@ process_file() {
   fi
   [[ -z "$before" ]] || before=$(awk -v b="$before" 'BEGIN {printf "%.2f", b / 1048576}')
   [[ -z "$after" ]] || after=$(awk -v b="$after" 'BEGIN {printf "%.2f", b / 1048576}')
-  display="${file//$'\n'/\\n}"
-  display="${display//$'\r'/\\r}"
-  display="${display//$'\t'/\\t}"
-  rows+=("$(printf '%-10s %12s %12s %9s  %s' "$label" "${before:--}" "${after:--}" "$saved" "$display")")
+  rows+=("$(printf '%-11s %12s %12s %9s  %s' "$label" "${before:--}" "${after:--}" "$saved" "$display")")
 }
 
 print_report() {
   if "$dry_run"; then
-    printf '\n%-10s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'Est. MiB' 'Est.saved' 'File'
+    printf '\n%-11s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'Est. MiB' 'Est.saved' 'File'
   else
-    printf '\n%-10s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'After MiB' 'Saved' 'File'
+    printf '\n%-11s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'After MiB' 'Saved' 'File'
   fi
   if (( ${#rows[@]} > 0 )); then printf '%s\n' "${rows[@]}"; fi
   if "$dry_run"; then
@@ -310,6 +314,17 @@ print_report() {
     echo "Summary: $compressed compressed, $skipped skipped, $failed failed"
   fi
 }
+
+interrupt_batch() {
+  trap '' INT
+  if [[ -n "$active_file" ]]; then
+    rows+=("$(printf '%-11s %12s %12s %9s  %s' interrupted - - - "$active_file")")
+  fi
+  printf '\nInterrupted by Ctrl+C.\n' >&2
+  print_report
+  exit 130
+}
+trap interrupt_batch INT
 
 if [[ ! -d "$target" ]]; then
   process_file "$target"

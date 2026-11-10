@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -120,6 +121,30 @@ print({'stream=codec_name': 'h264',
         self.assertTrue(self.source.exists())
         self.assertFalse((self.root / 'video_out.mp4').exists())
         self.assertEqual(len(calls), 2)  # No silent software retry.
+
+    def test_ctrl_c_stops_batch_and_prints_report(self):
+        second = self.root / "second.mp4"
+        with second.open("wb") as file:
+            file.truncate(self.source.stat().st_size)
+        self.device.unlink()
+        self.tool("ffmpeg", f"""#!/bin/sh
+printf 'encode\\n' >> "$CALL_LOG"
+kill -{signal.SIGINT.value} 0
+exit 255
+""")
+
+        result = subprocess.run(
+            ["/bin/bash", str(ROOT / "compress.sh"), str(self.root)],
+            env=self.env, capture_output=True, text=True, start_new_session=True, timeout=10,
+        )
+
+        self.assertEqual(result.returncode, 130, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), ["encode"])
+        self.assertIn("Before MiB", result.stdout)
+        self.assertIn("interrupted", result.stdout)
+        self.assertIn("Summary: 0 compressed, 0 skipped, 0 failed", result.stdout)
+        self.assertTrue(self.source.exists())
+        self.assertTrue(second.exists())
 
     def test_dry_run_estimates_without_encoding_or_changes(self):
         part = self.root / 'video_out.part.mp4'

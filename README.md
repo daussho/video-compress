@@ -61,6 +61,8 @@ By default, output shows the current file, compact FFmpeg progress, skip/error m
 
 Failures do not stop the batch. The final table lists each video's status, original size, output size, and percentage saved. Sizes are in MiB. The command exits nonzero if any file fails.
 
+Press Ctrl+C to stop the batch and print the results so far. The active file is marked interrupted, and the command exits with status 130. An interrupted encode may leave a temporary output.
+
 ## Dry run
 
 `--dry-run` applies the same size, bitrate, existing-output, and estimated-savings checks without encoding videos or changing originals or outputs. The table shows candidates, skipped files, failures, original sizes, estimated output sizes, and estimated savings. It also works with single files, `--recursive`, and `--verbose`.
