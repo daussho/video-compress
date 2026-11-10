@@ -142,7 +142,7 @@ valid_video() {
 compress_video() {
   local f="$1" out part start source_size video_info width height bitrate
   local duration audio_info audio_bitrate audio_type filters output_size output_info
-  local output_width output_height output_bitrate elapsed
+  local output_width output_height output_bitrate elapsed encode_status
   case "${f##*/}" in
     *_out.*|*.part.*) echo "Skipped generated file: $f"; return 2 ;;
   esac
@@ -231,14 +231,30 @@ compress_video() {
       return 1
     fi
   elif [[ "$encoder" == h264_vaapi ]]; then
-    # Software decoding supports inputs the GPU cannot decode. Upload NV12
-    # frames once, then perform scaling and H.264 encoding on the GPU.
-    filters=(-vf 'format=nv12,hwupload')
-    (( height <= 480 )) || filters=(-vf 'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
-    if ! ffmpeg "${ffmpeg_log[@]}" -nostdin -y -vaapi_device "$vaapi_device" -i "$f" \
+    # Keep decoded frames on the GPU; convert higher-bit-depth inputs to NV12
+    # for H.264 encoding even when no downscaling is needed.
+    filters=(-vf 'scale_vaapi=format=nv12')
+    (( height <= 480 )) || filters=(-vf 'scale_vaapi=w=-2:h=480:format=nv12')
+    if ffmpeg "${ffmpeg_log[@]}" -nostdin -y -vaapi_device "$vaapi_device" \
+      -hwaccel vaapi -hwaccel_output_format vaapi -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
-      echo "Error: compression failed: $f" >&2
-      return 1
+      :
+    else
+      encode_status=$?
+      # FFmpeg can return 255 on Ctrl+C, including when only it gets SIGINT.
+      case "$encode_status" in 130|255) interrupt_batch ;; esac
+      echo "VA-API hardware decoding/filtering failed; retrying with CPU decoding: $f" >&2
+      filters=(-vf 'format=nv12,hwupload')
+      (( height <= 480 )) || filters=(-vf 'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+      if ffmpeg "${ffmpeg_log[@]}" -nostdin -y -vaapi_device "$vaapi_device" -i "$f" \
+        -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
+        :
+      else
+        encode_status=$?
+        case "$encode_status" in 130|255) interrupt_batch ;; esac
+        echo "Error: compression failed: $f" >&2
+        return 1
+      fi
     fi
   else
     (( height <= 480 )) || filters=(-vf "scale=-2:480")

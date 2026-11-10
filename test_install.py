@@ -229,6 +229,7 @@ print(pathlib.Path(sys.argv[3]).stat().st_size)
   *) echo '1920,1080,3000000' ;;
 esac''')
         self.tool("ffmpeg", '''if [[ "$1" == -encoders ]]; then echo h264_videotoolbox; exit 0; fi
+if [[ " $* " == *" -f lavfi "* ]]; then exit 0; fi
 echo "$*" >> "$LOG"
 case " $* " in
   *" -loglevel error "*) echo 'compact progress' >&2 ;;

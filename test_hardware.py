@@ -42,14 +42,29 @@ if args == ['-encoders']:
     sys.exit(0)
 if 'lavfi' in args:
     sys.exit(0 if os.environ['PROBE_OK'] == '1' else 1)
+if '-hwaccel' in args:
+    if os.environ.get('INTERRUPT_DECODE') == '1':
+        import signal
+        os.killpg(os.getpgrp(), signal.SIGINT)
+        sys.exit(255)
+    status = int(os.environ.get('DECODE_STATUS', '0'))
+    if status:
+        pathlib.Path(args[-1]).write_bytes(b'partial hardware output')
+        sys.exit(status)
 if os.environ['ENCODE_OK'] != '1':
-    sys.exit(1)
-pathlib.Path(args[-1]).write_bytes(b'encoded video')
+    sys.exit(int(os.environ.get('ENCODE_STATUS', '1')))
+output = pathlib.Path(args[-1])
+output.write_bytes(b'encoded video')
+if os.environ.get('LARGE_OUTPUT') == '1':
+    with output.open('wb') as file:
+        file.truncate(45 * 1024 * 1024)
 ''')
         self.tool("ffprobe", '''#!/usr/bin/env python3
 import os, pathlib, sys
 args = sys.argv[1:]
 if not pathlib.Path(args[-1]).exists():
+    sys.exit(1)
+if '.part.' in args[-1] and os.environ.get('INVALID_OUTPUT') == '1':
     sys.exit(1)
 entry = args[args.index('-show_entries') + 1]
 duration = 'N/A' if pathlib.Path(args[-1]).name.startswith('unknown') else os.environ.get('DURATION', '10')
@@ -99,8 +114,15 @@ print({'stream=codec_name': 'h264',
         encode = calls[-1]
         self.assertEqual(encode[encode.index('-vaapi_device') + 1], str(self.device))
         self.assertEqual(encode[encode.index('-c:v') + 1], 'h264_vaapi')
+        self.assertEqual(encode[encode.index('-hwaccel') + 1], 'vaapi')
+        self.assertEqual(encode[encode.index('-hwaccel_output_format') + 1], 'vaapi')
+        self.assertLess(encode.index('-hwaccel'), encode.index('-i'))
         self.assertEqual(encode[encode.index('-vf') + 1],
-                         'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+                         'scale_vaapi=w=-2:h=480:format=nv12')
+        self.assertEqual(encode[encode.index('-b:v') + 1], '600k')
+        self.assertEqual(encode[encode.index('-fpsmax') + 1], '30')
+        self.assertEqual(encode[encode.index('-c:a') + 1], 'copy')
+        self.assertIn('0:a:0?', encode)
         self.assertNotIn('Estimated savings:', result.stdout)
         self.assertIn('Total saved: 50.00 MiB', result.stdout)
         self.assertIn('-hide_banner', encode)
@@ -120,7 +142,38 @@ print({'stream=codec_name': 'h264',
         self.env['HEIGHT'] = '360'
         result, calls = self.run_compress()
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[-1][calls[-1].index('-vf') + 1], 'scale_vaapi=format=nv12')
+
+    def test_failed_hardware_decode_retries_cpu_decode(self):
+        self.env['DECODE_STATUS'] = '1'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 3)
+        self.assertIn('-hwaccel', calls[1])
+        self.assertNotIn('-hwaccel', calls[2])
+        self.assertIn('h264_vaapi', calls[2])
+        self.assertEqual(calls[2][calls[2].index('-vf') + 1],
+                         'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+        self.assertIn('retrying with CPU decoding', result.stderr)
+        self.assertEqual((self.root / 'video_out.mp4').read_bytes(), b'encoded video')
+        self.assertFalse(self.source.exists())
+
+    def test_small_video_cpu_decode_fallback_is_not_upscaled(self):
+        self.env.update(DECODE_STATUS='1', HEIGHT='360')
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls[-1][calls[-1].index('-vf') + 1], 'format=nv12,hwupload')
+
+    def test_vaapi_output_validation_and_actual_savings_preserve_original(self):
+        for setting in ('INVALID_OUTPUT', 'LARGE_OUTPUT'):
+            with self.subTest(setting=setting):
+                self.env.pop('INVALID_OUTPUT', None)
+                self.env.pop('LARGE_OUTPUT', None)
+                self.env[setting] = '1'
+                result, calls = self.run_compress()
+                self.assertEqual(result.returncode, 1 if setting == 'INVALID_OUTPUT' else 0)
+                self.assertTrue(self.source.exists())
+                self.assertFalse((self.root / 'video_out.mp4').exists())
 
     def test_failed_probe_uses_software(self):
         self.env['PROBE_OK'] = '0'
@@ -140,11 +193,45 @@ print({'stream=codec_name': 'h264',
 
     def test_encoding_failure_preserves_original(self):
         self.env['ENCODE_OK'] = '0'
+        self.env['DECODE_STATUS'] = '1'
         result, calls = self.run_compress()
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(self.source.exists())
         self.assertFalse((self.root / 'video_out.mp4').exists())
-        self.assertEqual(len(calls), 2)  # No silent software retry.
+        self.assertEqual(len(calls), 3)  # No libx264 retry after both VA-API paths fail.
+
+    def test_vaapi_interrupt_does_not_retry_or_continue_batch(self):
+        second = self.root / 'second.mp4'
+        with second.open('wb') as file:
+            file.truncate(self.source.stat().st_size)
+        for setting, value in (('INTERRUPT_DECODE', '1'), ('DECODE_STATUS', '255'),
+                               ('DECODE_STATUS', '130')):
+            with self.subTest(setting=setting, value=value):
+                self.log.unlink(missing_ok=True)
+                for part in self.root.glob('*.part.mp4'):
+                    part.unlink()
+                self.env.pop('INTERRUPT_DECODE', None)
+                self.env[setting] = value
+                result = subprocess.run(
+                    ['/bin/bash', str(ROOT / 'compress.sh'), str(self.root)],
+                    env=self.env, capture_output=True, text=True, start_new_session=True, timeout=10,
+                )
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(result.returncode, 130, result.stderr)
+                self.assertEqual(len(calls), 2)  # Probe and one decode attempt only.
+                self.assertIn('interrupted', result.stdout)
+                self.assertIn('Summary: 0 compressed, 0 skipped, 0 failed', result.stdout)
+                self.assertTrue(self.source.exists())
+                self.assertTrue(second.exists())
+
+    def test_cpu_decode_fallback_interrupt_prints_partial_report(self):
+        self.env.update(DECODE_STATUS='1', ENCODE_OK='0', ENCODE_STATUS='255')
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 130, result.stderr)
+        self.assertEqual(len(calls), 3)
+        self.assertIn('interrupted', result.stdout)
+        self.assertIn('Summary: 0 compressed, 0 skipped, 0 failed', result.stdout)
+        self.assertTrue(self.source.exists())
 
     def test_ctrl_c_stops_batch_and_prints_report(self):
         second = self.root / "second.mp4"
