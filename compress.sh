@@ -336,38 +336,15 @@ estimated_input_bytes=0
 estimated_output_bytes=0
 rows=()
 active_file=
-process_file() {
-  local file="$1" before after status label saved display
+inspect_file() {
+  local file="$1"
   estimated_size=
   estimated_savings=
   before=$(file_size "$file" 2>/dev/null) || before=
-  display="${file//$'\n'/\\n}"
-  display="${display//$'\r'/\\r}"
-  display="${display//$'\t'/\\t}"
-  active_file="$display"
   if compress_video "$file"; then
-    active_file=
     status=0
-    label=compressed
-    compressed=$((compressed + 1))
   else
     status=$?
-    active_file=
-    if [[ "$status" == 3 ]]; then
-      label=candidate
-      candidates=$((candidates + 1))
-      if [[ -n "$before" && -n "$estimated_size" ]]; then
-        estimated_count=$((estimated_count + 1))
-        estimated_input_bytes=$((estimated_input_bytes + before))
-        estimated_output_bytes=$((estimated_output_bytes + estimated_size))
-      fi
-    elif [[ "$status" == 2 ]]; then
-      label=skipped
-      skipped=$((skipped + 1))
-    else
-      label=failed
-      failed=$((failed + 1))
-    fi
   fi
   after=
   if "$dry_run"; then
@@ -375,6 +352,27 @@ process_file() {
   elif [[ "$status" != 1 && -f "${file%.*}_out.mp4" ]]; then
     after=$(file_size "${file%.*}_out.mp4" 2>/dev/null) || after=
   fi
+}
+
+record_file() {
+  local display="$1" status="$2" before="$3" after="$4" label saved
+  case "$status" in
+    0) label=compressed; compressed=$((compressed + 1)) ;;
+    2) label=skipped; skipped=$((skipped + 1)) ;;
+    3)
+      label=candidate
+      candidates=$((candidates + 1))
+      if [[ -n "$before" && -n "$after" ]]; then
+        estimated_count=$((estimated_count + 1))
+        estimated_input_bytes=$((estimated_input_bytes + before))
+        estimated_output_bytes=$((estimated_output_bytes + after))
+      fi
+      ;;
+    *) label=failed; failed=$((failed + 1)) ;;
+  esac
+  display="${display//$'\n'/\\n}"
+  display="${display//$'\r'/\\r}"
+  display="${display//$'\t'/\\t}"
   saved=-
   if [[ -n "$before" && -n "$after" ]] && (( before > 0 )); then
     if [[ "$status" == 0 ]]; then
@@ -385,6 +383,14 @@ process_file() {
   [[ -z "$before" ]] || before=$(awk -v b="$before" 'BEGIN {printf "%.2f", b / 1048576}')
   [[ -z "$after" ]] || after=$(awk -v b="$after" 'BEGIN {printf "%.2f", b / 1048576}')
   rows+=("$(printf '%-11s %12s %12s %9s  %s' "$label" "${before:--}" "${after:--}" "$saved" "$display")")
+}
+
+process_file() {
+  local before after status
+  active_file="$1"
+  inspect_file "$1"
+  active_file=
+  record_file "$1" "$status" "$before" "$after"
 }
 
 format_size() {
@@ -421,6 +427,9 @@ print_report() {
 interrupt_batch() {
   trap '' INT
   if [[ -n "$active_file" ]]; then
+    active_file="${active_file//$'\n'/\\n}"
+    active_file="${active_file//$'\r'/\\r}"
+    active_file="${active_file//$'\t'/\\t}"
     rows+=("$(printf '%-11s %12s %12s %9s  %s' interrupted - - - "$active_file")")
   fi
   printf '\nInterrupted by Ctrl+C.\n' >&2
@@ -437,8 +446,35 @@ if [[ ! -d "$target" ]]; then
 fi
 
 # Snapshot paths before encoding creates new files in the same directory.
-files=$(mktemp) || exit 1
-trap 'rm -f -- "$files"' EXIT
+scan_dir=$(mktemp -d) || exit 1
+files="$scan_dir/files"
+scan_pids=()
+scan_paths=()
+
+cleanup_scan() {
+  if (( ${#scan_pids[@]} )); then
+    kill "${scan_pids[@]}" 2>/dev/null || :
+    wait 2>/dev/null || :
+  fi
+  rm -rf -- "$scan_dir"
+}
+trap cleanup_scan EXIT
+
+collect_scans() {
+  local index status before after
+  for index in "${!scan_pids[@]}"; do
+    if wait "${scan_pids[index]}" &&
+      IFS=: read -r status before after < "$scan_dir/$index"; then
+      record_file "${scan_paths[index]}" "$status" "$before" "$after"
+    else
+      echo "Error: dry-run scan failed: ${scan_paths[index]}" >&2
+      record_file "${scan_paths[index]}" 1 "" ""
+    fi
+    unset 'scan_pids[index]'
+  done
+  scan_paths=()
+}
+
 if "$recursive"; then
   find "$target" -type f -print0 > "$files" || exit 1
 else
@@ -450,7 +486,19 @@ while IFS= read -r -d '' file; do
     mp4|mov|mkv|webm|m4v|avi|mpg|mpeg|ts|mts|m2ts) ;;
     *) continue ;;
   esac
-  process_file "$file"
+  if "$dry_run"; then
+    index=${#scan_pids[@]}
+    scan_paths[index]="$file"
+    (
+      inspect_file "$file"
+      printf '%s:%s:%s\n' "$status" "$before" "$after" > "$scan_dir/$index"
+    ) </dev/null &
+    scan_pids[index]=$!
+    if (( ${#scan_pids[@]} == 4 )); then collect_scans; fi
+  else
+    process_file "$file"
+  fi
 done < "$files"
+if "$dry_run"; then collect_scans; fi
 print_report
 [[ "$failed" == 0 ]]

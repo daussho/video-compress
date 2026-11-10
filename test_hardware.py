@@ -72,6 +72,15 @@ if not pathlib.Path(args[-1]).exists():
 if '.part.' in args[-1] and os.environ.get('INVALID_OUTPUT') == '1':
     sys.exit(1)
 entry = args[args.index('-show_entries') + 1]
+if os.environ.get('PARALLEL_PROBE_DIR') and entry == 'stream=width,height,bit_rate':
+    import time
+    markers = pathlib.Path(os.environ['PARALLEL_PROBE_DIR'])
+    (markers / pathlib.Path(args[-1]).name).touch()
+    deadline = time.monotonic() + 5
+    while len(list(markers.iterdir())) < 2:
+        if time.monotonic() >= deadline:
+            sys.exit(1)
+        time.sleep(0.02)
 duration = 'N/A' if pathlib.Path(args[-1]).name.startswith('unknown') else os.environ.get('DURATION', '10')
 print({'stream=codec_name': 'h264',
        'stream=width,height,bit_rate': '1280,' + os.environ['HEIGHT'] + ',' + os.environ.get('BITRATE', '2000000'),
@@ -304,6 +313,9 @@ exit 255
         nested.mkdir()
         small = nested / 'small.mp4'
         small.write_bytes(b'too small')
+        markers = self.root / 'probe-markers'
+        markers.mkdir()
+        self.env['PARALLEL_PROBE_DIR'] = str(markers)
         result = subprocess.run(['/bin/bash', str(ROOT / 'compress.sh'), '--dry-run', '--recursive',
                                  '--verbose', str(self.root)], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

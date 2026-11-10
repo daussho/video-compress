@@ -69,7 +69,7 @@ Run `vcompress --check-gpu` to test hardware H.264 encoding with a generated fra
 
 ## Dry run
 
-`--dry-run` applies the same size, bitrate, existing-output, and estimated-savings checks without encoding videos or changing originals or outputs. The table shows candidates, skipped files, failures, original sizes, estimated output sizes, and estimated savings. It also works with single files, `--recursive`, and `--verbose`.
+`--dry-run` applies the same size, bitrate, existing-output, and estimated-savings checks without encoding videos or changing originals or outputs. The table shows candidates, skipped files, failures, original sizes, estimated output sizes, and estimated savings. It also works with single files, `--recursive`, and `--verbose`. Directory dry runs scan metadata for up to four files at a time and keep the report rows in traversal order.
 
 Hardware estimates use duration, 600 kb/s video, and copied audio bitrate, excluding container overhead. Missing duration/audio bitrate and software CRF encoding show `-` for unknown estimates; those files can remain candidates because only an actual encode establishes savings. Linux dry runs check encoder listings and readable/writable GPU devices but skip the test encode. GPU availability and final savings are not guaranteed. A normal run still enforces the actual 20% savings minimum before deleting originals.
 
