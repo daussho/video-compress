@@ -36,6 +36,9 @@ import json, os, pathlib, sys
 args = sys.argv[1:]
 with open(os.environ['CALL_LOG'], 'a') as log:
     log.write(json.dumps(args) + '\\n')
+if args == ['-encoders']:
+    print('h264_vaapi')
+    sys.exit(0)
 if 'lavfi' in args:
     sys.exit(0 if os.environ['PROBE_OK'] == '1' else 1)
 if os.environ['ENCODE_OK'] != '1':
@@ -48,9 +51,10 @@ args = sys.argv[1:]
 if not pathlib.Path(args[-1]).exists():
     sys.exit(1)
 entry = args[args.index('-show_entries') + 1]
+duration = 'N/A' if pathlib.Path(args[-1]).name.startswith('unknown') else os.environ.get('DURATION', '10')
 print({'stream=codec_name': 'h264',
-       'stream=width,height,bit_rate': '1280,' + os.environ['HEIGHT'] + ',2000000',
-       'format=duration': '10', 'stream=codec_type,bit_rate': ''}[entry])
+       'stream=width,height,bit_rate': '1280,' + os.environ['HEIGHT'] + ',' + os.environ.get('BITRATE', '2000000'),
+       'format=duration': duration, 'stream=codec_type,bit_rate': ''}[entry])
 ''')
 
     def tool(self, name, contents):
@@ -61,7 +65,7 @@ print({'stream=codec_name': 'h264',
     def run_compress(self, *flags):
         result = subprocess.run(["/bin/bash", str(ROOT / "compress.sh"), str(self.source), *flags],
                                 env=self.env, capture_output=True, text=True)
-        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
     def test_vaapi_encoding_and_gpu_downscaling(self):
@@ -116,6 +120,59 @@ print({'stream=codec_name': 'h264',
         self.assertTrue(self.source.exists())
         self.assertFalse((self.root / 'video_out.mp4').exists())
         self.assertEqual(len(calls), 2)  # No silent software retry.
+
+    def test_dry_run_estimates_without_encoding_or_changes(self):
+        part = self.root / 'video_out.part.mp4'
+        part.write_bytes(b'keep unfinished output')
+        result, calls = self.run_compress('--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['-encoders']])
+        self.assertIn('candidate', result.stdout)
+        self.assertIn('Est. MiB', result.stdout)
+        self.assertIn('98.6%', result.stdout)
+        self.assertIn('Dry-run summary: 1 candidates, 0 skipped, 0 failed', result.stdout)
+        self.assertEqual(self.source.stat().st_size, 50 * 1024 * 1024)
+        self.assertEqual(part.read_bytes(), b'keep unfinished output')
+        self.assertFalse((self.root / 'video_out.mp4').exists())
+
+    def test_dry_run_skips_poor_estimated_savings(self):
+        self.env['DURATION'] = '650'
+        result, calls = self.run_compress('--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('estimated savings below 20%', result.stdout)
+        self.assertIn('Dry-run summary: 0 candidates, 1 skipped, 0 failed', result.stdout)
+        self.assertEqual(calls, [['-encoders']])
+        self.assertTrue(self.source.exists())
+
+    def test_software_dry_run_reports_unknown_estimates(self):
+        self.device.unlink()
+        result, calls = self.run_compress('--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [])
+        self.assertIn('Video encoder: libx264', result.stdout)
+        row = next(line for line in result.stdout.splitlines() if line.startswith('candidate'))
+        self.assertEqual(row.split()[:4], ['candidate', '50.00', '-', '-'])
+        self.assertTrue(self.source.exists())
+
+    def test_dry_run_batch_recursion_and_unknown_estimate_reset(self):
+        unknown = self.root / 'unknown.mp4'
+        with unknown.open('wb') as file:
+            file.truncate(50 * 1024 * 1024)
+        nested = self.root / 'nested'
+        nested.mkdir()
+        small = nested / 'small.mp4'
+        small.write_bytes(b'too small')
+        result = subprocess.run(['/bin/bash', str(ROOT / 'compress.sh'), '--dry-run', '--recursive',
+                                 '--verbose', str(self.root)], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Dry-run summary: 2 candidates, 1 skipped, 0 failed', result.stdout)
+        row = next(line for line in result.stdout.splitlines()
+                   if line.startswith('candidate') and str(unknown) in line)
+        self.assertEqual(row.split()[:4], ['candidate', '50.00', '-', '-'])
+        self.assertEqual(small.read_bytes(), b'too small')
+        self.assertTrue(unknown.exists())
+        self.assertTrue(self.source.exists())
+        self.assertFalse(list(self.root.rglob('*_out*')))
 
 
 if __name__ == '__main__':

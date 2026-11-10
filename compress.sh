@@ -41,11 +41,13 @@ file_size() {
 }
 recursive=false
 verbose=false
+dry_run=false
 target=
 for arg in "$@"; do
   case "$arg" in
     --recursive) recursive=true ;;
     --verbose) verbose=true ;;
+    --dry-run) dry_run=true ;;
     -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *)
       if [[ -n "$target" ]]; then
@@ -57,7 +59,7 @@ for arg in "$@"; do
   esac
 done
 if [[ -z "$target" || ! -e "$target" ]]; then
-  echo "Usage: $0 [--recursive] [--verbose] <video-file-or-directory> | --update" >&2
+  echo "Usage: $0 [--recursive] [--verbose] [--dry-run] <video-file-or-directory> | --update" >&2
   exit 1
 fi
 # Keep relative filenames from being interpreted as command options.
@@ -77,6 +79,13 @@ elif [[ "$platform" == Linux ]]; then
   [[ -z "${VCOMPRESS_VAAPI_DEVICE:-}" ]] || devices=("$VCOMPRESS_VAAPI_DEVICE")
   for device in "${devices[@]}"; do
     [[ -r "$device" && -w "$device" ]] || continue
+    if "$dry_run"; then
+      if ffmpeg -encoders 2>/dev/null | grep -q h264_vaapi; then
+        hardware=true
+        encoder=h264_vaapi
+      fi
+      break
+    fi
     if ffmpeg -hide_banner -loglevel error -nostdin -vaapi_device "$device" \
       -f lavfi -i color=size=64x64:rate=1 \
       -vf 'format=nv12,hwupload,scale_vaapi=w=32:h=32' \
@@ -94,6 +103,10 @@ detail() {
   if "$verbose"; then printf '%s\n' "$*"; fi
 }
 echo "Video encoder: $encoder"
+if "$dry_run"; then
+  echo "Dry run: no videos encoded or changed. GPU availability is not verified."
+  echo "Estimates exclude container overhead; unknown estimates are shown as -."
+fi
 
 valid_video() {
   local codec
@@ -101,9 +114,11 @@ valid_video() {
     -show_entries stream=codec_name -of csv=p=0 "$1") && [[ -n "$codec" ]]
 }
 
-# Return 2 for skips so batch mode can count them separately from failures.
-compress_video() (
-  f="$1"
+# Return 2 for skips and 3 for dry-run candidates.
+compress_video() {
+  local f="$1" out part start source_size video_info width height bitrate
+  local duration audio_info audio_bitrate audio_type filters output_size output_info
+  local output_width output_height output_bitrate elapsed
   case "${f##*/}" in
     *_out.*|*.part.*) echo "Skipped generated file: $f"; return 2 ;;
   esac
@@ -164,6 +179,8 @@ compress_video() (
         awk -v d="$duration" 'BEGIN {exit !(d > 0)}'; then
         estimated_savings=$(awk -v d="$duration" -v a="$audio_bitrate" -v size="$source_size" \
           'BEGIN {printf "%.1f", (1 - d * (600000 + a) / 8 / size) * 100}')
+        estimated_size=$(awk -v d="$duration" -v a="$audio_bitrate" \
+          'BEGIN {printf "%.0f", d * (600000 + a) / 8}')
         detail "Estimated savings: ${estimated_savings}%: $f"
         if awk -v d="$duration" -v a="$audio_bitrate" -v size="$source_size" -v min="$min_savings" \
           'BEGIN {exit !(d * (600000 + a) / 8 > size * (100 - min) / 100)}'; then
@@ -177,6 +194,8 @@ compress_video() (
       detail "Estimate unavailable, will check actual savings: $f"
     fi
   fi
+
+  if "$dry_run"; then return 3; fi
 
   filters=()
   printf 'Compressing: %s\n' "$f"
@@ -231,14 +250,17 @@ compress_video() (
     echo "Elapsed: ${elapsed}s"
     echo "Deleted original: $f"
   fi
-)
+}
 
 compressed=0
 skipped=0
 failed=0
+candidates=0
 rows=()
 process_file() {
   local file="$1" before after status label saved display
+  estimated_size=
+  estimated_savings=
   before=$(file_size "$file" 2>/dev/null) || before=
   if compress_video "$file"; then
     status=0
@@ -246,7 +268,10 @@ process_file() {
     compressed=$((compressed + 1))
   else
     status=$?
-    if [[ "$status" == 2 ]]; then
+    if [[ "$status" == 3 ]]; then
+      label=candidate
+      candidates=$((candidates + 1))
+    elif [[ "$status" == 2 ]]; then
       label=skipped
       skipped=$((skipped + 1))
     else
@@ -255,7 +280,9 @@ process_file() {
     fi
   fi
   after=
-  if [[ "$status" != 1 && -f "${file%.*}_out.mp4" ]]; then
+  if "$dry_run"; then
+    after="$estimated_size"
+  elif [[ "$status" != 1 && -f "${file%.*}_out.mp4" ]]; then
     after=$(file_size "${file%.*}_out.mp4" 2>/dev/null) || after=
   fi
   saved=-
@@ -271,9 +298,17 @@ process_file() {
 }
 
 print_report() {
-  printf '\n%-10s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'After MiB' 'Saved' 'File'
+  if "$dry_run"; then
+    printf '\n%-10s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'Est. MiB' 'Est.saved' 'File'
+  else
+    printf '\n%-10s %12s %12s %9s  %s\n' 'Status' 'Before MiB' 'After MiB' 'Saved' 'File'
+  fi
   if (( ${#rows[@]} > 0 )); then printf '%s\n' "${rows[@]}"; fi
-  echo "Summary: $compressed compressed, $skipped skipped, $failed failed"
+  if "$dry_run"; then
+    echo "Dry-run summary: $candidates candidates, $skipped skipped, $failed failed"
+  else
+    echo "Summary: $compressed compressed, $skipped skipped, $failed failed"
+  fi
 }
 
 if [[ ! -d "$target" ]]; then

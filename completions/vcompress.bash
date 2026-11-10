@@ -2,7 +2,7 @@ _vcompress_complete() {
   local current="${COMP_WORDS[COMP_CWORD]}" option
   COMPREPLY=()
   if [[ "$current" == -* ]]; then
-    for option in --recursive --update --verbose; do
+    for option in --recursive --update --verbose --dry-run; do
       [[ "$option" != "$current"* ]] || COMPREPLY+=("$option")
     done
   fi

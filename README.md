@@ -50,6 +50,9 @@ vcompress --recursive "/path/to/videos"
 
 # Show full FFmpeg logs and detailed per-file statistics.
 vcompress --verbose "/path/to/video.mp4"
+
+# Preview eligible videos and estimated savings, without encoding or deleting.
+vcompress --dry-run --recursive "/path/to/videos"
 ```
 
 Directory mode recognizes `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.avi`, `.mpg`, `.mpeg`, `.ts`, `.mts`, and `.m2ts`, case-insensitively. Files are processed sequentially in filesystem traversal order, without explicit sorting. Symlink files are not processed.
@@ -58,9 +61,15 @@ By default, output shows the current file, compact FFmpeg progress, skip/error m
 
 Failures do not stop the batch. The final table lists each video's status, original size, output size, and percentage saved. Sizes are in MiB. The command exits nonzero if any file fails.
 
+## Dry run
+
+`--dry-run` applies the same size, bitrate, existing-output, and estimated-savings checks without encoding videos or changing originals or outputs. The table shows candidates, skipped files, failures, original sizes, estimated output sizes, and estimated savings. It also works with single files, `--recursive`, and `--verbose`.
+
+Hardware estimates use duration, 600 kb/s video, and copied audio bitrate, excluding container overhead. Missing duration/audio bitrate and software CRF encoding show `-` for unknown estimates; those files can remain candidates because only an actual encode establishes savings. Linux dry runs check encoder listings and readable/writable GPU devices but skip the test encode. GPU availability and final savings are not guaranteed. A normal run still enforces the actual 20% savings minimum before deleting originals.
+
 ## Tab completion
 
-Complete `vcompress --rec` to `--recursive`, `--up` to `--update`, or `--ver` to `--verbose`, by pressing Tab. Normal file and directory completion is preserved.
+Complete `vcompress --rec` to `--recursive`, `--up` to `--update`, `--ver` to `--verbose`, or `--dry` to `--dry-run`, by pressing Tab. Normal file and directory completion is preserved.
 
 For Zsh, run these lines now and add them to `~/.zshrc`, after any shell framework initialization:
 
