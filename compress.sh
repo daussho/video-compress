@@ -256,6 +256,9 @@ compressed=0
 skipped=0
 failed=0
 candidates=0
+estimated_count=0
+estimated_input_bytes=0
+estimated_output_bytes=0
 rows=()
 active_file=
 process_file() {
@@ -278,6 +281,11 @@ process_file() {
     if [[ "$status" == 3 ]]; then
       label=candidate
       candidates=$((candidates + 1))
+      if [[ -n "$before" && -n "$estimated_size" ]]; then
+        estimated_count=$((estimated_count + 1))
+        estimated_input_bytes=$((estimated_input_bytes + before))
+        estimated_output_bytes=$((estimated_output_bytes + estimated_size))
+      fi
     elif [[ "$status" == 2 ]]; then
       label=skipped
       skipped=$((skipped + 1))
@@ -310,6 +318,21 @@ print_report() {
   if (( ${#rows[@]} > 0 )); then printf '%s\n' "${rows[@]}"; fi
   if "$dry_run"; then
     echo "Dry-run summary: $candidates candidates, $skipped skipped, $failed failed"
+    if (( estimated_count > 0 )); then
+      awk -v input="$estimated_input_bytes" -v output="$estimated_output_bytes" \
+        -v count="$estimated_count" -v candidates="$candidates" '
+        function size(bytes) {
+          if (bytes >= 1073741824) return sprintf("%.2f GiB", bytes / 1073741824)
+          return sprintf("%.2f MiB", bytes / 1048576)
+        }
+        BEGIN {
+          printf "Estimated totals for %d of %d candidates: %s before, %s after, %s saved\n",
+            count, candidates, size(input), size(output), size(input - output)
+        }'
+    fi
+    if (( estimated_count < candidates )); then
+      echo "Candidates without estimates: $((candidates - estimated_count))"
+    fi
   else
     echo "Summary: $compressed compressed, $skipped skipped, $failed failed"
   fi

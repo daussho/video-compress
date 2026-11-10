@@ -191,6 +191,9 @@ exit 255
                                  '--verbose', str(self.root)], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Dry-run summary: 2 candidates, 1 skipped, 0 failed', result.stdout)
+        self.assertIn('Estimated totals for 1 of 2 candidates: 50.00 MiB before, '
+                      '0.72 MiB after, 49.28 MiB saved', result.stdout)
+        self.assertIn('Candidates without estimates: 1', result.stdout)
         row = next(line for line in result.stdout.splitlines()
                    if line.startswith('candidate') and str(unknown) in line)
         self.assertEqual(row.split()[:4], ['candidate', '50.00', '-', '-'])

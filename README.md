@@ -69,6 +69,8 @@ Press Ctrl+C to stop the batch and print the results so far. The active file is 
 
 Hardware estimates use duration, 600 kb/s video, and copied audio bitrate, excluding container overhead. Missing duration/audio bitrate and software CRF encoding show `-` for unknown estimates; those files can remain candidates because only an actual encode establishes savings. Linux dry runs check encoder listings and readable/writable GPU devices but skip the test encode. GPU availability and final savings are not guaranteed. A normal run still enforces the actual 20% savings minimum before deleting originals.
 
+The dry-run summary totals the original size, estimated output size, and estimated savings for candidates with estimates. Totals use MiB or GiB, and the summary counts candidates with unknown estimates separately.
+
 ## Tab completion
 
 Complete `vcompress --rec` to `--recursive`, `--up` to `--update`, `--ver` to `--verbose`, or `--dry` to `--dry-run`, by pressing Tab. Normal file and directory completion is preserved.
