@@ -60,37 +60,103 @@ for arg in "$@"; do
       ;;
   esac
 done
+gpu_stage() {
+  local stage="$1"
+  shift
+  printf 'Testing %s...\n' "$stage"
+  if ffmpeg -hide_banner -loglevel error -nostdin -xerror "$@"; then
+    printf 'PASS: %s\n' "$stage"
+  else
+    printf 'FAIL: %s\n' "$stage" >&2
+    return 1
+  fi
+}
+
+check_gpu_pipeline() {
+  local gpu_encoder scale device sample
+  local device_args=() upload_args=() decode_args=() encoder_args=()
+  case "$platform" in
+    Darwin)
+      gpu_encoder=h264_videotoolbox
+      scale=scale_vt=320:240
+      decode_args=(-hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld)
+      encoder_args=(-allow_sw 0)
+      ;;
+    Linux)
+      gpu_encoder=h264_vaapi
+      scale=scale_vaapi=w=320:h=240:format=nv12
+      upload_args=(-vf 'format=nv12,hwupload')
+      decode_args=(-hwaccel vaapi -hwaccel_output_format vaapi)
+      ;;
+    *) echo "GPU diagnostics unavailable on $platform." >&2; return 1 ;;
+  esac
+
+  gpu_check_dir=$(mktemp -d) || return 1
+  trap 'rm -rf -- "$gpu_check_dir"' EXIT
+  sample="$gpu_check_dir/sample.mp4"
+  if [[ "$platform" == Linux ]]; then
+    for device in "${devices[@]}"; do
+      if [[ ! -r "$device" || ! -w "$device" ]]; then
+        printf 'VA-API device missing or inaccessible: %s\n' "$device" >&2
+        continue
+      fi
+      printf 'VA-API device: %s\n' "$device"
+      device_args=(-vaapi_device "$device")
+      if gpu_stage "H.264 hardware encoding ($gpu_encoder)" "${device_args[@]}" \
+        -y -f lavfi -i color=size=640x480:rate=30 "${upload_args[@]}" \
+        -frames:v 3 -c:v "$gpu_encoder" -b:v 600k "$sample"; then
+        break
+      fi
+      rm -f -- "$sample"
+    done
+    if [[ ! -s "$sample" ]]; then
+      echo "Hardware H.264 encoding unavailable on $platform." >&2
+      return 1
+    fi
+  else
+    gpu_stage "H.264 hardware encoding ($gpu_encoder)" -f lavfi -i color=size=640x480:rate=30 \
+      -frames:v 3 -c:v "$gpu_encoder" "${encoder_args[@]}" -b:v 600k "$sample" || return 1
+  fi
+
+  local input_args=("${device_args[@]}" "${decode_args[@]}" -i "$sample" -an -frames:v 3)
+  gpu_stage "H.264 hardware decoding" "${input_args[@]}" -f null - || return 1
+  gpu_stage "hardware scaling" "${input_args[@]}" -vf "$scale" -f null - || return 1
+  gpu_stage "hardware decode, scale, and encode together" "${input_args[@]}" \
+    -vf "$scale" -c:v "$gpu_encoder" "${encoder_args[@]}" -b:v 600k -f null - || return 1
+  printf 'Hardware H.264 pipeline available: %s\n' "$gpu_encoder"
+}
+
+if [[ "$platform" == Linux ]]; then
+  devices=(/dev/dri/renderD*)
+  [[ -z "${VCOMPRESS_VAAPI_DEVICE:-}" ]] || devices=("$VCOMPRESS_VAAPI_DEVICE")
+fi
 if "$check_gpu"; then
   if (( $# != 1 )); then
     echo "Usage: $0 --check-gpu" >&2
     exit 1
   fi
   command -v ffmpeg >/dev/null || { echo "Missing command: ffmpeg" >&2; exit 1; }
-else
-  if [[ -z "$target" || ! -e "$target" ]]; then
-    echo "Usage: $0 [--recursive] [--verbose] [--dry-run] <video-file-or-directory> | --update | --check-gpu" >&2
-    exit 1
-  fi
-  # Keep relative filenames from being interpreted as command options.
-  [[ "$target" == /* ]] || target="./$target"
-  for tool in ffmpeg ffprobe; do
-    command -v "$tool" >/dev/null || { echo "Missing command: $tool" >&2; exit 1; }
-  done
+  check_gpu_pipeline
+  exit $?
 fi
+
+if [[ -z "$target" || ! -e "$target" ]]; then
+  echo "Usage: $0 [--recursive] [--verbose] [--dry-run] <video-file-or-directory> | --update | --check-gpu" >&2
+  exit 1
+fi
+# Keep relative filenames from being interpreted as command options.
+[[ "$target" == /* ]] || target="./$target"
+for tool in ffmpeg ffprobe; do
+  command -v "$tool" >/dev/null || { echo "Missing command: $tool" >&2; exit 1; }
+done
 hardware=false
 encoder=libx264
 if [[ "$platform" == Darwin ]] && ffmpeg -encoders 2>/dev/null | grep -q h264_videotoolbox; then
-  if ! "$check_gpu" || ffmpeg -hide_banner -loglevel error -nostdin \
-    -f lavfi -i color=size=640x480:rate=30 -frames:v 1 \
-    -c:v h264_videotoolbox -allow_sw 0 -b:v 600k -f null -; then
-    hardware=true
-    encoder=h264_videotoolbox
-  fi
+  hardware=true
+  encoder=h264_videotoolbox
 elif [[ "$platform" == Linux ]]; then
   # Probe an actual encode: an advertised encoder alone does not prove that
   # the driver, device permissions, and GPU support are usable.
-  devices=(/dev/dri/renderD*)
-  [[ -z "${VCOMPRESS_VAAPI_DEVICE:-}" ]] || devices=("$VCOMPRESS_VAAPI_DEVICE")
   for device in "${devices[@]}"; do
     [[ -r "$device" && -w "$device" ]] || continue
     if "$dry_run"; then
@@ -111,16 +177,6 @@ elif [[ "$platform" == Linux ]]; then
     fi
   done
 fi
-if "$check_gpu"; then
-  if "$hardware"; then
-    printf 'Hardware H.264 encoding available: %s\n' "$encoder"
-    if [[ -n "${vaapi_device:-}" ]]; then printf 'VA-API device: %s\n' "$vaapi_device"; fi
-    exit 0
-  fi
-  echo "Hardware H.264 encoding unavailable on $platform." >&2
-  exit 1
-fi
-
 ffmpeg_log=(-hide_banner -loglevel error -stats)
 if "$verbose"; then ffmpeg_log=(); fi
 encode_video() {

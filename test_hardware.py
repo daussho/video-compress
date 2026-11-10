@@ -41,7 +41,17 @@ if args == ['-encoders']:
     print('h264_vaapi')
     sys.exit(0)
 if 'lavfi' in args:
-    sys.exit(0 if os.environ['PROBE_OK'] == '1' else 1)
+    if os.environ['PROBE_OK'] != '1':
+        print('test encoder error', file=sys.stderr)
+        sys.exit(1)
+    if args[-1] != '-':
+        pathlib.Path(args[-1]).write_bytes(b'diagnostic sample')
+    sys.exit(0)
+if '-i' in args and pathlib.Path(args[args.index('-i') + 1]).name == 'sample.mp4':
+    if os.environ.get('GPU_DIAGNOSTIC_FAIL') == 'decode':
+        print('test decoder error', file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
 if '-hwaccel' in args:
     if os.environ.get('INTERRUPT_DECODE') == '1':
         import signal
@@ -99,24 +109,32 @@ print({'stream=codec_name': 'h264',
         return result, calls
 
     def test_check_gpu_probes_vaapi_without_video(self):
-        for probe_ok in ("1", "0"):
-            with self.subTest(probe_ok=probe_ok):
-                self.env["PROBE_OK"] = probe_ok
+        for failure, expected_calls in (("", 4), ("decode", 2), ("encode", 1)):
+            with self.subTest(failure=failure):
+                self.log.unlink(missing_ok=True)
+                self.env["PROBE_OK"] = "0" if failure == "encode" else "1"
+                self.env["GPU_DIAGNOSTIC_FAIL"] = failure
                 result = subprocess.run(
                     ["/bin/bash", str(ROOT / "compress.sh"), "--check-gpu"],
                     env=self.env, capture_output=True, text=True,
                 )
-                if probe_ok == "1":
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn("Hardware H.264 encoding available: h264_vaapi", result.stdout)
-                    self.assertIn(f"VA-API device: {self.device}", result.stdout)
-                else:
+                self.assertIn(f"VA-API device: {self.device}", result.stdout)
+                if failure:
                     self.assertEqual(result.returncode, 1)
-                    self.assertIn("Hardware H.264 encoding unavailable", result.stderr)
+                    stage = "encoding" if failure == "encode" else "decoding"
+                    self.assertIn(f"FAIL: H.264 hardware {stage}", result.stderr)
+                    self.assertIn(f"test {failure}r error", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("PASS: H.264 hardware decoding", result.stdout)
+                    self.assertIn("PASS: hardware scaling", result.stdout)
+                    self.assertIn("Hardware H.264 pipeline available: h264_vaapi", result.stdout)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(len(calls), expected_calls)
+                self.assertIn("lavfi", calls[0])
+                self.assertFalse(Path(calls[0][-1]).parent.exists())
+                self.assertTrue(all("-hwaccel" in call and call[-1] == "-" for call in calls[1:]))
 
-        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(all("lavfi" in call and call[-1] == "-" for call in calls))
         self.assertTrue(self.source.exists())
         self.assertFalse(list(self.root.glob("*_out*")))
 
