@@ -259,7 +259,7 @@ printf video > "$last"''')
         self.assertNotIn("Stream mapping", result.stderr)
         self.assertNotIn("Estimated savings", result.stdout)
         self.assertNotIn("Deleted original", result.stdout)
-        self.assertIn("-hide_banner -loglevel error -stats", (self.root / "log").read_text())
+        self.assertIn("-hide_banner -loglevel error -nostats -progress pipe:1", (self.root / "log").read_text())
 
     def test_verbose_output_restores_details(self):
         self.prepare_compression_output_test()

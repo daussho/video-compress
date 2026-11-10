@@ -123,6 +123,37 @@ fi
 
 ffmpeg_log=(-hide_banner -loglevel error -stats)
 if "$verbose"; then ffmpeg_log=(); fi
+encode_video() {
+  local duration="$1" terminal=0
+  shift
+  if "$verbose" || ! [[ "$duration" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+    ! awk -v d="$duration" 'BEGIN {exit !(d > 0)}'; then
+    ffmpeg "${ffmpeg_log[@]}" "$@"
+    return $?
+  fi
+
+  [[ ! -t 2 ]] || terminal=1
+  ffmpeg -hide_banner -loglevel error -nostats -progress pipe:1 "$@" |
+    awk -F= -v duration="$duration" -v terminal="$terminal" '
+      $1 == "out_time_us" && $2 ~ /^-?[0-9]+$/ { elapsed = $2 / 1000000 }
+      $1 == "speed" { speed = $2 + 0 }
+      $1 == "progress" {
+        if (elapsed < 0) elapsed = 0
+        if (elapsed > duration || $2 == "end") elapsed = duration
+        eta = "--:--:--"
+        if (speed > 0 || $2 == "end") {
+          seconds = speed > 0 ? (duration - elapsed) / speed : 0
+          eta = sprintf("%02d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+        }
+        if (terminal) printf "\r"
+        printf "Progress: %5.1f%% | Speed: %.1fx | ETA: %s", elapsed / duration * 100, speed, eta
+        shown = 1
+        if (!terminal) printf "\n"
+        fflush()
+      }
+      END { if (terminal && shown) printf "\n" }' >&2
+  return "${PIPESTATUS[0]}"
+}
 detail() {
   if "$verbose"; then printf '%s\n' "$*"; fi
 }
@@ -221,11 +252,14 @@ compress_video() {
 
   if "$dry_run"; then return 3; fi
 
+  if ! "$verbose" && [[ -z "$duration" ]]; then
+    duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f") || duration=
+  fi
   filters=()
   printf 'Compressing: %s\n' "$f"
   if [[ "$encoder" == h264_videotoolbox ]]; then
     (( height <= 480 )) || filters=(-vf "scale_vt=-2:480")
-    if ! ffmpeg "${ffmpeg_log[@]}" -nostdin -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
+    if ! encode_video "$duration" -nostdin -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_videotoolbox -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
       echo "Error: compression failed: $f" >&2
       return 1
@@ -235,7 +269,7 @@ compress_video() {
     # for H.264 encoding even when no downscaling is needed.
     filters=(-vf 'scale_vaapi=format=nv12')
     (( height <= 480 )) || filters=(-vf 'scale_vaapi=w=-2:h=480:format=nv12')
-    if ffmpeg "${ffmpeg_log[@]}" -nostdin -y -vaapi_device "$vaapi_device" \
+    if encode_video "$duration" -nostdin -y -vaapi_device "$vaapi_device" \
       -hwaccel vaapi -hwaccel_output_format vaapi -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
       :
@@ -246,7 +280,7 @@ compress_video() {
       echo "VA-API hardware decoding/filtering failed; retrying with CPU decoding: $f" >&2
       filters=(-vf 'format=nv12,hwupload')
       (( height <= 480 )) || filters=(-vf 'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
-      if ffmpeg "${ffmpeg_log[@]}" -nostdin -y -vaapi_device "$vaapi_device" -i "$f" \
+      if encode_video "$duration" -nostdin -y -vaapi_device "$vaapi_device" -i "$f" \
         -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
         :
       else
@@ -258,7 +292,7 @@ compress_video() {
     fi
   else
     (( height <= 480 )) || filters=(-vf "scale=-2:480")
-    if ! ffmpeg "${ffmpeg_log[@]}" -nostdin -y -i "$f" -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset ultrafast -crf 28 -fpsmax 30 \
+    if ! encode_video "$duration" -nostdin -y -i "$f" -map 0:v:0 -map '0:a:0?' -c:v libx264 -preset ultrafast -crf 28 -fpsmax 30 \
       "${filters[@]}" -c:a copy "$part"; then
       echo "Error: compression failed: $f" >&2
       return 1

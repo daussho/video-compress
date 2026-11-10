@@ -57,7 +57,7 @@ vcompress --dry-run --recursive "/path/to/videos"
 
 Directory mode recognizes `.mp4`, `.mov`, `.mkv`, `.webm`, `.m4v`, `.avi`, `.mpg`, `.mpeg`, `.ts`, `.mts`, and `.m2ts`, case-insensitively. Files are processed sequentially in filesystem traversal order, without explicit sorting. Symlink files are not processed.
 
-By default, output shows the current file, compact FFmpeg progress, skip/error messages, and the final size table. Use `--verbose` to include the FFmpeg banner, stream metadata, savings estimates, and detailed per-file statistics. Errors remain visible in both modes.
+By default, output shows the current file, per-video progress with speed and estimated time remaining when duration is known, skip/error messages, and the final size table. Use `--verbose` to include the FFmpeg banner, stream metadata, savings estimates, and detailed per-file statistics. Errors remain visible in both modes.
 
 Failures do not stop the batch. The final table lists each video's status, original size, output size, and percentage saved. Table sizes are in MiB. The summary shows total space saved by successful compressions in MiB or GiB. The command exits nonzero if any file fails.
 

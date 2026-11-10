@@ -53,6 +53,11 @@ if '-hwaccel' in args:
         sys.exit(status)
 if os.environ['ENCODE_OK'] != '1':
     sys.exit(int(os.environ.get('ENCODE_STATUS', '1')))
+if '-progress' in args:
+    print('out_time_us=4000000')
+    print('speed=2x')
+    print('progress=continue')
+    print('progress=end')
 output = pathlib.Path(args[-1])
 output.write_bytes(b'encoded video')
 if os.environ.get('LARGE_OUTPUT') == '1':
@@ -127,7 +132,8 @@ print({'stream=codec_name': 'h264',
         self.assertIn('Total saved: 50.00 MiB', result.stdout)
         self.assertIn('-hide_banner', encode)
         self.assertEqual(encode[encode.index('-loglevel') + 1], 'error')
-        self.assertIn('-stats', encode)
+        self.assertIn('-progress', encode)
+        self.assertIn('Progress:  40.0% | Speed: 2.0x | ETA: 00:00:03', result.stderr)
         self.assertFalse(self.source.exists())
         self.assertTrue((self.root / 'video_out.mp4').exists())
 
