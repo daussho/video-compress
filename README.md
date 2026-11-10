@@ -70,9 +70,15 @@ Encoding is lossy. Frame-rate reduction, downscaling, and the low video bitrate 
 ## Update
 
 ```bash
+vcompress --update
+```
+
+The command follows the installed symlink to its Git checkout and pulls from the configured upstream using `--ff-only`. It refuses staged, unstaged, or untracked local changes. Diverged history and network errors fail without discarding local work. The next invocation uses the updated script; FFmpeg is not required to update.
+
+For older versions without `--update`, bootstrap once with:
+
+```bash
 git -C "$HOME/.local/share/video-compress" pull --ff-only
 ```
 
-The installed symlink uses the updated script immediately. A built-in `--update` option is not implemented yet.
-
-If you cloned elsewhere, run `git pull --ff-only` in that checkout instead.
+If you cloned elsewhere, run that pull in your checkout instead. Standalone copies cannot self-update and must be installed from a Git clone.

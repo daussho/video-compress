@@ -1,6 +1,35 @@
 #!/bin/bash
 set -e
 
+if [[ "${1:-}" == --update ]]; then
+  if (( $# != 1 )); then
+    echo "Usage: $0 --update" >&2
+    exit 1
+  fi
+  command -v git >/dev/null || { echo "Missing command: git" >&2; exit 1; }
+  script=${BASH_SOURCE[0]}
+  while [[ -L "$script" ]]; do
+    script_dir=$(cd -P "$(dirname "$script")" && pwd)
+    script=$(readlink "$script")
+    [[ "$script" == /* ]] || script="$script_dir/$script"
+  done
+  script_dir=$(cd -P "$(dirname "$script")" && pwd)
+  if ! repo=$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null) || \
+    [[ "$repo" != "$script_dir" ]] || \
+    ! git -C "$repo" ls-files --error-unmatch -- "${script##*/}" >/dev/null 2>&1; then
+    echo "Self-update requires a Git checkout. Reinstall using install.sh" >&2
+    exit 1
+  fi
+  changes=$(git -C "$repo" status --porcelain)
+  if [[ -n "$changes" ]]; then
+    echo "Update refused: checkout has local changes. Commit or move them first" >&2
+    exit 1
+  fi
+  echo "Updating: $repo"
+  # Replace this process so Bash never continues reading a script changed by Git.
+  exec git -C "$repo" pull --ff-only
+fi
+
 min_savings=20
 platform=$(uname -s)
 file_size() {
@@ -26,7 +55,7 @@ for arg in "$@"; do
   esac
 done
 if [[ -z "$target" || ! -e "$target" ]]; then
-  echo "Usage: $0 [--recursive] <video-file-or-directory>" >&2
+  echo "Usage: $0 [--recursive] <video-file-or-directory> | --update" >&2
   exit 1
 fi
 # Keep relative filenames from being interpreted as command options.
