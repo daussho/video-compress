@@ -253,6 +253,7 @@ compress_video() {
 }
 
 compressed=0
+saved_bytes=0
 skipped=0
 failed=0
 candidates=0
@@ -302,11 +303,21 @@ process_file() {
   fi
   saved=-
   if [[ -n "$before" && -n "$after" ]] && (( before > 0 )); then
+    if [[ "$status" == 0 ]]; then
+      saved_bytes=$((saved_bytes + before - after))
+    fi
     saved=$(awk -v old="$before" -v new="$after" 'BEGIN {printf "%.1f%%", (1 - new / old) * 100}')
   fi
   [[ -z "$before" ]] || before=$(awk -v b="$before" 'BEGIN {printf "%.2f", b / 1048576}')
   [[ -z "$after" ]] || after=$(awk -v b="$after" 'BEGIN {printf "%.2f", b / 1048576}')
   rows+=("$(printf '%-11s %12s %12s %9s  %s' "$label" "${before:--}" "${after:--}" "$saved" "$display")")
+}
+
+format_size() {
+  awk -v bytes="$1" 'BEGIN {
+    if (bytes >= 1073741824) printf "%.2f GiB", bytes / 1073741824
+    else printf "%.2f MiB", bytes / 1048576
+  }'
 }
 
 print_report() {
@@ -319,22 +330,17 @@ print_report() {
   if "$dry_run"; then
     echo "Dry-run summary: $candidates candidates, $skipped skipped, $failed failed"
     if (( estimated_count > 0 )); then
-      awk -v input="$estimated_input_bytes" -v output="$estimated_output_bytes" \
-        -v count="$estimated_count" -v candidates="$candidates" '
-        function size(bytes) {
-          if (bytes >= 1073741824) return sprintf("%.2f GiB", bytes / 1073741824)
-          return sprintf("%.2f MiB", bytes / 1048576)
-        }
-        BEGIN {
-          printf "Estimated totals for %d of %d candidates: %s before, %s after, %s saved\n",
-            count, candidates, size(input), size(output), size(input - output)
-        }'
+      printf 'Estimated totals for %d of %d candidates: %s before, %s after, %s saved\n' \
+        "$estimated_count" "$candidates" "$(format_size "$estimated_input_bytes")" \
+        "$(format_size "$estimated_output_bytes")" \
+        "$(format_size "$((estimated_input_bytes - estimated_output_bytes))")"
     fi
     if (( estimated_count < candidates )); then
       echo "Candidates without estimates: $((candidates - estimated_count))"
     fi
   else
     echo "Summary: $compressed compressed, $skipped skipped, $failed failed"
+    printf 'Total saved: %s\n' "$(format_size "$saved_bytes")"
   fi
 }
 

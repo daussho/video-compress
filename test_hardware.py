@@ -80,6 +80,7 @@ print({'stream=codec_name': 'h264',
         self.assertEqual(encode[encode.index('-vf') + 1],
                          'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
         self.assertNotIn('Estimated savings:', result.stdout)
+        self.assertIn('Total saved: 50.00 MiB', result.stdout)
         self.assertIn('-hide_banner', encode)
         self.assertEqual(encode[encode.index('-loglevel') + 1], 'error')
         self.assertIn('-stats', encode)
@@ -106,6 +107,7 @@ print({'stream=codec_name': 'h264',
         self.assertIn('Video encoder: libx264', result.stdout)
         self.assertIn('libx264', calls[-1])
         self.assertNotIn('Estimated savings:', result.stdout)
+        self.assertIn('Total saved: 50.00 MiB', result.stdout)
 
     def test_missing_device_uses_software_without_probe(self):
         self.device.unlink()
