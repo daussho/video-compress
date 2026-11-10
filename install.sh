@@ -1,10 +1,13 @@
 #!/bin/bash
 set -e
 
+# Newer Bash reports its executable as BASH_SOURCE inside stdin-defined functions.
+installer_source=${BASH_SOURCE[0]:-}
+
 # Define the full installer before running commands that might read stdin.
 install_vcompress() {
-if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-  source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+if [[ -n "$installer_source" ]]; then
+  source_dir=$(cd "$(dirname "$installer_source")" && pwd -P)
   if [[ ! -x "$source_dir/compress.sh" ]]; then
     echo "Run install.sh from a checkout, or pipe it into bash" >&2
     return 1

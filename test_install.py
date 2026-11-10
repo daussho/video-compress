@@ -45,12 +45,12 @@ fi''')
         path.write_text("#!/bin/bash\n" + body + "\n")
         path.chmod(0o755)
 
-    def install(self):
-        return subprocess.run(["/bin/bash", str(self.checkout / "install.sh")],
+    def install(self, shell="/bin/bash"):
+        return subprocess.run([shell, str(self.checkout / "install.sh")],
                               env=self.env, capture_output=True, text=True)
 
-    def piped_install(self):
-        return subprocess.run(["/bin/bash"], input=(self.checkout / "install.sh").read_text(),
+    def piped_install(self, shell="/bin/bash"):
+        return subprocess.run([shell], input=(self.checkout / "install.sh").read_text(),
                               env=self.env, capture_output=True, text=True)
 
     def mock_clone(self):
@@ -86,6 +86,18 @@ else:
             self.assertEqual((home / ".local/bin/vcompress").resolve(),
                              (home / ".local/share/video-compress/compress.sh").resolve())
         self.assertEqual((self.root / "log").read_text().count("git clone "), 1)
+
+    def test_piped_install_with_path_bash(self):
+        self.mock_clone()
+        result = self.piped_install(shutil.which("bash"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((Path(self.env["HOME"]) / ".local/bin/vcompress").is_symlink())
+
+    def test_local_install_with_path_bash(self):
+        result = self.install(shutil.which("bash"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        link = Path(self.env["HOME"]) / ".local/bin/vcompress"
+        self.assertEqual(link.resolve(), (self.checkout / "compress.sh").resolve())
 
     def test_piped_install_rejects_unrelated_checkout(self):
         self.mock_clone()
