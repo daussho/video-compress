@@ -4,6 +4,7 @@ _vcompress() {
     '--update[Update the installed Git checkout]' \
     '--verbose[Show full FFmpeg logs and per-file details]' \
     '--dry-run[List compression candidates and estimated savings without encoding]' \
+    '--check-gpu[Test hardware H.264 encoding]' \
     '1:video file or directory:_files'
 }
 

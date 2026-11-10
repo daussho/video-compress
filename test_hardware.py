@@ -69,6 +69,28 @@ print({'stream=codec_name': 'h264',
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
+    def test_check_gpu_probes_vaapi_without_video(self):
+        for probe_ok in ("1", "0"):
+            with self.subTest(probe_ok=probe_ok):
+                self.env["PROBE_OK"] = probe_ok
+                result = subprocess.run(
+                    ["/bin/bash", str(ROOT / "compress.sh"), "--check-gpu"],
+                    env=self.env, capture_output=True, text=True,
+                )
+                if probe_ok == "1":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Hardware H.264 encoding available: h264_vaapi", result.stdout)
+                    self.assertIn(f"VA-API device: {self.device}", result.stdout)
+                else:
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("Hardware H.264 encoding unavailable", result.stderr)
+
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all("lavfi" in call and call[-1] == "-" for call in calls))
+        self.assertTrue(self.source.exists())
+        self.assertFalse(list(self.root.glob("*_out*")))
+
     def test_vaapi_encoding_and_gpu_downscaling(self):
         result, calls = self.run_compress()
         self.assertEqual(result.returncode, 0, result.stderr)

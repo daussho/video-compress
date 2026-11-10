@@ -12,8 +12,8 @@ class CompletionTests(unittest.TestCase):
         for shell in dict.fromkeys(("/bin/bash", shutil.which("bash"))):
             for prefix, expected in (("--rec", "--recursive"), ("--up", "--update"),
                                      ("--ver", "--verbose"),
-                                     ("--dry", "--dry-run"),
-                                     ("--", "--recursive\n--update\n--verbose\n--dry-run"), ("file name", ""),
+                                     ("--dry", "--dry-run"), ("--check", "--check-gpu"),
+                                     ("--", "--recursive\n--update\n--verbose\n--dry-run\n--check-gpu"), ("file name", ""),
                                      ("--unknown", ""), ("", "")):
                 with self.subTest(shell=shell, prefix=prefix):
                     result = subprocess.run([shell, "-c", '''
@@ -45,6 +45,7 @@ _vcompress
         self.assertIn("--update[", result.stdout)
         self.assertIn("--verbose[", result.stdout)
         self.assertIn("--dry-run[", result.stdout)
+        self.assertIn("--check-gpu[", result.stdout)
         self.assertIn(":_files", result.stdout)
 
 

@@ -42,12 +42,14 @@ file_size() {
 recursive=false
 verbose=false
 dry_run=false
+check_gpu=false
 target=
 for arg in "$@"; do
   case "$arg" in
     --recursive) recursive=true ;;
     --verbose) verbose=true ;;
     --dry-run) dry_run=true ;;
+    --check-gpu) check_gpu=true ;;
     -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *)
       if [[ -n "$target" ]]; then
@@ -58,20 +60,32 @@ for arg in "$@"; do
       ;;
   esac
 done
-if [[ -z "$target" || ! -e "$target" ]]; then
-  echo "Usage: $0 [--recursive] [--verbose] [--dry-run] <video-file-or-directory> | --update" >&2
-  exit 1
+if "$check_gpu"; then
+  if (( $# != 1 )); then
+    echo "Usage: $0 --check-gpu" >&2
+    exit 1
+  fi
+  command -v ffmpeg >/dev/null || { echo "Missing command: ffmpeg" >&2; exit 1; }
+else
+  if [[ -z "$target" || ! -e "$target" ]]; then
+    echo "Usage: $0 [--recursive] [--verbose] [--dry-run] <video-file-or-directory> | --update | --check-gpu" >&2
+    exit 1
+  fi
+  # Keep relative filenames from being interpreted as command options.
+  [[ "$target" == /* ]] || target="./$target"
+  for tool in ffmpeg ffprobe; do
+    command -v "$tool" >/dev/null || { echo "Missing command: $tool" >&2; exit 1; }
+  done
 fi
-# Keep relative filenames from being interpreted as command options.
-[[ "$target" == /* ]] || target="./$target"
-for tool in ffmpeg ffprobe; do
-  command -v "$tool" >/dev/null || { echo "Missing command: $tool" >&2; exit 1; }
-done
 hardware=false
 encoder=libx264
 if [[ "$platform" == Darwin ]] && ffmpeg -encoders 2>/dev/null | grep -q h264_videotoolbox; then
-  hardware=true
-  encoder=h264_videotoolbox
+  if ! "$check_gpu" || ffmpeg -hide_banner -loglevel error -nostdin \
+    -f lavfi -i color=size=640x480:rate=30 -frames:v 1 \
+    -c:v h264_videotoolbox -allow_sw 0 -b:v 600k -f null -; then
+    hardware=true
+    encoder=h264_videotoolbox
+  fi
 elif [[ "$platform" == Linux ]]; then
   # Probe an actual encode: an advertised encoder alone does not prove that
   # the driver, device permissions, and GPU support are usable.
@@ -97,6 +111,16 @@ elif [[ "$platform" == Linux ]]; then
     fi
   done
 fi
+if "$check_gpu"; then
+  if "$hardware"; then
+    printf 'Hardware H.264 encoding available: %s\n' "$encoder"
+    if [[ -n "${vaapi_device:-}" ]]; then printf 'VA-API device: %s\n' "$vaapi_device"; fi
+    exit 0
+  fi
+  echo "Hardware H.264 encoding unavailable on $platform." >&2
+  exit 1
+fi
+
 ffmpeg_log=(-hide_banner -loglevel error -stats)
 if "$verbose"; then ffmpeg_log=(); fi
 detail() {

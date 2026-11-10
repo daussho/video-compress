@@ -63,6 +63,10 @@ Failures do not stop the batch. The final table lists each video's status, origi
 
 Press Ctrl+C to stop the batch and print the results so far. The active file is marked interrupted, and the command exits with status 130. An interrupted encode may leave a temporary output.
 
+## Check GPU encoding
+
+Run `vcompress --check-gpu` to test hardware H.264 encoding with a generated frame. It takes no video path and creates no output file. It reports VideoToolbox on macOS or VA-API and the selected device on Linux. Exit status is 0 when the test succeeds and 1 when hardware encoding is unavailable or FFmpeg is missing. On macOS, this tests encoding independently of input decoding and scaling.
+
 ## Dry run
 
 `--dry-run` applies the same size, bitrate, existing-output, and estimated-savings checks without encoding videos or changing originals or outputs. The table shows candidates, skipped files, failures, original sizes, estimated output sizes, and estimated savings. It also works with single files, `--recursive`, and `--verbose`.
