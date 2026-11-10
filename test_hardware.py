@@ -1,0 +1,107 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).parent
+
+
+class HardwareTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="vcompress-hardware-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.tools = self.root / "bin"
+        self.tools.mkdir()
+        self.device = self.root / "render device"
+        self.device.touch()
+        self.source = self.root / "video.mp4"
+        with self.source.open("wb") as file:
+            file.truncate(50 * 1024 * 1024)
+        self.log = self.root / "calls.jsonl"
+        self.env = dict(os.environ, PATH=f"{self.tools}:{os.environ['PATH']}",
+                        VCOMPRESS_VAAPI_DEVICE=str(self.device), CALL_LOG=str(self.log),
+                        PROBE_OK="1", ENCODE_OK="1", HEIGHT="720")
+        self.tool("uname", "#!/bin/sh\necho Linux\n")
+        self.tool("ffmpeg", '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+with open(os.environ['CALL_LOG'], 'a') as log:
+    log.write(json.dumps(args) + '\\n')
+if 'lavfi' in args:
+    sys.exit(0 if os.environ['PROBE_OK'] == '1' else 1)
+if os.environ['ENCODE_OK'] != '1':
+    sys.exit(1)
+pathlib.Path(args[-1]).write_bytes(b'encoded video')
+''')
+        self.tool("ffprobe", '''#!/usr/bin/env python3
+import os, pathlib, sys
+args = sys.argv[1:]
+if not pathlib.Path(args[-1]).exists():
+    sys.exit(1)
+entry = args[args.index('-show_entries') + 1]
+print({'stream=codec_name': 'h264',
+       'stream=width,height,bit_rate': '1280,' + os.environ['HEIGHT'] + ',2000000',
+       'format=duration': '10', 'stream=codec_type,bit_rate': ''}[entry])
+''')
+
+    def tool(self, name, contents):
+        path = self.tools / name
+        path.write_text(contents)
+        path.chmod(0o755)
+
+    def run_compress(self):
+        result = subprocess.run(["/bin/bash", str(ROOT / "compress.sh"), str(self.source)],
+                                env=self.env, capture_output=True, text=True)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        return result, calls
+
+    def test_vaapi_encoding_and_gpu_downscaling(self):
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Video encoder: h264_vaapi", result.stdout)
+        self.assertEqual(len(calls), 2)
+        encode = calls[-1]
+        self.assertEqual(encode[encode.index('-vaapi_device') + 1], str(self.device))
+        self.assertEqual(encode[encode.index('-c:v') + 1], 'h264_vaapi')
+        self.assertEqual(encode[encode.index('-vf') + 1],
+                         'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+        self.assertIn('Estimated savings:', result.stdout)
+        self.assertFalse(self.source.exists())
+        self.assertTrue((self.root / 'video_out.mp4').exists())
+
+    def test_small_video_is_not_upscaled(self):
+        self.env['HEIGHT'] = '360'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[-1][calls[-1].index('-vf') + 1], 'format=nv12,hwupload')
+
+    def test_failed_probe_uses_software(self):
+        self.env['PROBE_OK'] = '0'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Video encoder: libx264', result.stdout)
+        self.assertIn('libx264', calls[-1])
+        self.assertNotIn('Estimated savings:', result.stdout)
+
+    def test_missing_device_uses_software_without_probe(self):
+        self.device.unlink()
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertIn('libx264', calls[-1])
+
+    def test_encoding_failure_preserves_original(self):
+        self.env['ENCODE_OK'] = '0'
+        result, calls = self.run_compress()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.source.exists())
+        self.assertFalse((self.root / 'video_out.mp4').exists())
+        self.assertEqual(len(calls), 2)  # No silent software retry.
+
+
+if __name__ == '__main__':
+    unittest.main()

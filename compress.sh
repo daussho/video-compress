@@ -64,9 +64,29 @@ for tool in ffmpeg ffprobe; do
   command -v "$tool" >/dev/null || { echo "Missing command: $tool" >&2; exit 1; }
 done
 hardware=false
+encoder=libx264
 if [[ "$platform" == Darwin ]] && ffmpeg -encoders 2>/dev/null | grep -q h264_videotoolbox; then
   hardware=true
+  encoder=h264_videotoolbox
+elif [[ "$platform" == Linux ]]; then
+  # Probe an actual encode: an advertised encoder alone does not prove that
+  # the driver, device permissions, and GPU support are usable.
+  devices=(/dev/dri/renderD*)
+  [[ -z "${VCOMPRESS_VAAPI_DEVICE:-}" ]] || devices=("$VCOMPRESS_VAAPI_DEVICE")
+  for device in "${devices[@]}"; do
+    [[ -r "$device" && -w "$device" ]] || continue
+    if ffmpeg -hide_banner -loglevel error -nostdin -vaapi_device "$device" \
+      -f lavfi -i color=size=64x64:rate=1 \
+      -vf 'format=nv12,hwupload,scale_vaapi=w=32:h=32' \
+      -frames:v 1 -c:v h264_vaapi -b:v 600k -f null - >/dev/null 2>&1; then
+      hardware=true
+      encoder=h264_vaapi
+      vaapi_device="$device"
+      break
+    fi
+  done
 fi
+echo "Video encoder: $encoder"
 
 valid_video() {
   local codec
@@ -152,10 +172,20 @@ compress_video() (
   fi
 
   filters=()
-  if "$hardware"; then
+  if [[ "$encoder" == h264_videotoolbox ]]; then
     (( height <= 480 )) || filters=(-vf "scale_vt=-2:480")
     if ! ffmpeg -nostdin -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_videotoolbox -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
+      echo "Error: compression failed: $f" >&2
+      return 1
+    fi
+  elif [[ "$encoder" == h264_vaapi ]]; then
+    # Software decoding supports inputs the GPU cannot decode. Upload NV12
+    # frames once, then perform scaling and H.264 encoding on the GPU.
+    filters=(-vf 'format=nv12,hwupload')
+    (( height <= 480 )) || filters=(-vf 'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+    if ! ffmpeg -nostdin -y -vaapi_device "$vaapi_device" -i "$f" \
+      -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
       echo "Error: compression failed: $f" >&2
       return 1
     fi
