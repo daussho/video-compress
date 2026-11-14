@@ -82,7 +82,7 @@ if not pathlib.Path(args[-1]).exists():
 if '.part.' in args[-1] and os.environ.get('INVALID_OUTPUT') == '1':
     sys.exit(1)
 entry = args[args.index('-show_entries') + 1]
-if os.environ.get('PARALLEL_PROBE_DIR') and entry == 'stream=width,height,bit_rate':
+if os.environ.get('PARALLEL_PROBE_DIR') and entry == 'stream=width,height,pix_fmt,bit_rate':
     import time
     markers = pathlib.Path(os.environ['PARALLEL_PROBE_DIR'])
     (markers / pathlib.Path(args[-1]).name).touch()
@@ -93,6 +93,7 @@ if os.environ.get('PARALLEL_PROBE_DIR') and entry == 'stream=width,height,bit_ra
         time.sleep(0.02)
 duration = 'N/A' if pathlib.Path(args[-1]).name.startswith('unknown') else os.environ.get('DURATION', '10')
 print({'stream=codec_name': 'h264',
+       'stream=width,height,pix_fmt,bit_rate': '1280,' + os.environ['HEIGHT'] + ',' + os.environ.get('PIX_FMT', 'yuv420p') + ',' + os.environ.get('BITRATE', '2000000'),
        'stream=width,height,bit_rate': '1280,' + os.environ['HEIGHT'] + ',' + os.environ.get('BITRATE', '2000000'),
        'format=duration': duration, 'stream=codec_type,bit_rate': ''}[entry])
 ''')
@@ -173,6 +174,12 @@ print({'stream=codec_name': 'h264',
 
     def test_small_video_is_not_upscaled(self):
         self.env['HEIGHT'] = '360'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('-vf', calls[-1])
+
+    def test_small_ten_bit_video_converts_to_nv12(self):
+        self.env.update(HEIGHT='360', PIX_FMT='yuv420p10le')
         result, calls = self.run_compress()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls[-1][calls[-1].index('-vf') + 1], 'scale_vaapi=format=nv12')

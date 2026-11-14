@@ -167,8 +167,8 @@ elif [[ "$platform" == Linux ]]; then
       break
     fi
     if ffmpeg -hide_banner -loglevel error -nostdin -vaapi_device "$device" \
-      -f lavfi -i color=size=64x64:rate=1 \
-      -vf 'format=nv12,hwupload,scale_vaapi=w=32:h=32' \
+      -f lavfi -i color=size=640x480:rate=30 \
+      -vf 'format=nv12,hwupload,scale_vaapi=w=320:h=240:format=nv12' \
       -frames:v 1 -c:v h264_vaapi -b:v 600k -f null - >/dev/null 2>&1; then
       hardware=true
       encoder=h264_vaapi
@@ -227,7 +227,7 @@ valid_video() {
 
 # Return 2 for skips and 3 for dry-run candidates.
 compress_video() {
-  local f="$1" out part start source_size video_info width height bitrate
+  local f="$1" out part start source_size video_info width height pixel_format bitrate
   local duration audio_info audio_bitrate audio_type filters output_size output_info
   local output_width output_height output_bitrate elapsed encode_status
   case "${f##*/}" in
@@ -259,11 +259,11 @@ compress_video() {
     return 2
   fi
   if ! video_info=$(ffprobe -v error -select_streams v:0 \
-    -show_entries stream=width,height,bit_rate -of csv=p=0 "$f"); then
+    -show_entries stream=width,height,pix_fmt,bit_rate -of csv=p=0 "$f"); then
     echo "Error: cannot read video metadata: $f" >&2
     return 1
   fi
-  IFS=, read -r width height bitrate <<< "$video_info"
+  IFS=, read -r width height pixel_format bitrate <<< "$video_info"
   if ! [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || (( width == 0 || height == 0 )); then
     echo "Error: invalid video metadata: $f" >&2
     return 1
@@ -321,11 +321,15 @@ compress_video() {
       return 1
     fi
   elif [[ "$encoder" == h264_vaapi ]]; then
-    # Keep decoded frames on the GPU; convert higher-bit-depth inputs to NV12
-    # for H.264 encoding even when no downscaling is needed.
-    filters=(-vf 'scale_vaapi=format=nv12')
-    (( height <= 480 )) || filters=(-vf 'scale_vaapi=w=-2:h=480:format=nv12')
-    if encode_video "$duration" -nostdin -y -vaapi_device "$vaapi_device" \
+    # VA-API decoders use NV12 surfaces for ordinary 8-bit 4:2:0 video.
+    # Other formats still need conversion before H.264 encoding.
+    if (( height > 480 )); then
+      filters=(-vf 'scale_vaapi=w=-2:h=480:format=nv12')
+    elif [[ "$pixel_format" != yuv420p && "$pixel_format" != nv12 ]]; then
+      filters=(-vf 'scale_vaapi=format=nv12')
+    fi
+    detail "Trying VA-API decoding and H.264 encoding on $vaapi_device"
+    if encode_video "$duration" -nostdin -xerror -y -vaapi_device "$vaapi_device" \
       -hwaccel vaapi -hwaccel_output_format vaapi -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
       :

@@ -226,6 +226,7 @@ print(pathlib.Path(sys.argv[3]).stat().st_size)
   *stream=codec_type*) ;;
   *format=duration*) echo 100 ;;
   *stream=codec_name*) echo h264 ;;
+  *stream=width,height,pix_fmt,bit_rate*) echo '1920,1080,yuv420p,3000000' ;;
   *) echo '1920,1080,3000000' ;;
 esac''')
         self.tool("ffmpeg", '''if [[ "$1" == -encoders ]]; then echo h264_videotoolbox; exit 0; fi
