@@ -220,7 +220,7 @@ print(pathlib.Path(sys.argv[3]).stat().st_size)
 
     def prepare_compression_output_test(self):
         self.env["PLATFORM"] = "Darwin" if sys.platform == "darwin" else "Linux"
-        for name in ("stat", "date", "awk", "mv", "rm", "grep"):
+        for name in ("stat", "date", "awk", "mv", "rm", "grep", "touch"):
             (self.bin / name).symlink_to(shutil.which(name))
         self.tool("ffprobe", '''case "$*" in
   *stream=codec_type*) ;;

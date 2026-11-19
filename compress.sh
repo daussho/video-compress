@@ -372,6 +372,17 @@ compress_video() {
   output_info=$(ffprobe -v error -select_streams v:0 \
     -show_entries stream=width,height,bit_rate -of csv=p=0 "$part") || return 1
   IFS=, read -r output_width output_height output_bitrate <<< "$output_info"
+  # Preserve timestamps before publishing the output and deleting the source.
+  touch -r "$f" "$part" || return 1
+  if [[ "$platform" == Darwin ]]; then
+    if command -v SetFile >/dev/null; then
+      local creation_time
+      creation_time=$(stat -f '%SB' -t '%m/%d/%Y %H:%M:%S' "$f") || return 1
+      SetFile -d "$creation_time" "$part" || return 1
+    else
+      echo "Warning: SetFile unavailable; original creation time could not be preserved: $f" >&2
+    fi
+  fi
   mv -- "$part" "$out" || return 1
   rm -- "$f" || return 1
   elapsed=$(( $(date +%s) - start ))

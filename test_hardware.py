@@ -140,6 +140,8 @@ print({'stream=codec_name': 'h264',
         self.assertFalse(list(self.root.glob("*_out*")))
 
     def test_vaapi_encoding_and_gpu_downscaling(self):
+        original_time = 1577836800
+        os.utime(self.source, (original_time, original_time))
         result, calls = self.run_compress()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Video encoder: h264_vaapi", result.stdout)
@@ -164,6 +166,7 @@ print({'stream=codec_name': 'h264',
         self.assertIn('Progress:  40.0% | Speed: 2.0x | ETA: 00:00:03', result.stderr)
         self.assertFalse(self.source.exists())
         self.assertTrue((self.root / 'video_out.mp4').exists())
+        self.assertEqual((self.root / 'video_out.mp4').stat().st_mtime, original_time)
 
     def test_verbose_vaapi_output(self):
         result, calls = self.run_compress('--verbose')

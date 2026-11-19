@@ -109,7 +109,7 @@ If your macOS Bash login shell does not load `~/.bashrc`, put the source line in
 
 For hardware encoding, estimated output size uses duration, the 600 kb/s video target, and the copied audio bitrate. Estimated savings below 20% skip encoding. Missing estimation metadata and software CRF encoding use only the final-size check.
 
-After encoding, actual savings must reach 20%. Otherwise, the temporary output is discarded and the original is kept. Accepted output is saved beside the original as `<name>_out.mp4`, then the original is deleted. Failed encodes may leave `<name>_out.part.mp4` for inspection.
+After encoding, actual savings must reach 20%. Otherwise, the temporary output is discarded and the original is kept. The output preserves the original file’s modification and access times. On macOS, creation time is also preserved when `SetFile` is available. Linux creation time is not portably writable. Accepted output is saved beside the original as `<name>_out.mp4`, then the original is deleted. Failed encodes may leave `<name>_out.part.mp4` for inspection.
 
 Encoding is lossy. Frame-rate reduction, downscaling, and the low video bitrate can visibly reduce quality. Copied audio must be compatible with MP4 or encoding will fail.
 
