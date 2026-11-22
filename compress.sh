@@ -225,6 +225,30 @@ valid_video() {
     -show_entries stream=codec_name -of csv=p=0 "$1") && [[ -n "$codec" ]]
 }
 
+# Each scan owns a cache directory. Cache only input metadata, never output checks.
+ffprobe() {
+  local entry= argument previous= cache_file result
+  if [[ -z "${probe_cache:-}" || "${!#}" != "${probe_source:-}" ]]; then
+    command ffprobe "$@"
+    return $?
+  fi
+  for argument in "$@"; do
+    [[ "$previous" != -show_entries ]] || entry="$argument"
+    previous="$argument"
+  done
+  cache_file="$probe_cache/${entry//\//_}"
+  if [[ -f "$cache_file" ]]; then
+    cat "$cache_file"
+    return 0
+  fi
+  if result=$(command ffprobe "$@"); then
+    printf '%s\n' "$result" > "$cache_file"
+    printf '%s\n' "$result"
+  else
+    return $?
+  fi
+}
+
 # Return 2 for skips and 3 for dry-run candidates.
 compress_video() {
   local f="$1" out part start source_size video_info width height pixel_format bitrate
@@ -306,7 +330,7 @@ compress_video() {
     fi
   fi
 
-  if "$dry_run"; then return 3; fi
+  if "$dry_run" || "${scan_only:-false}"; then return 3; fi
 
   if ! "$verbose" && [[ -z "$duration" ]]; then
     duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f") || duration=
@@ -546,16 +570,51 @@ collect_scans() {
   local index status before after
   for index in "${!scan_pids[@]}"; do
     if wait "${scan_pids[index]}" &&
-      IFS=: read -r status before after < "$scan_dir/$index"; then
-      record_file "${scan_paths[index]}" "$status" "$before" "$after"
+      IFS=: read -r status before after < "$scan_dir/$index/result"; then
+      if ! "$dry_run" && [[ "$status" == 3 ]]; then
+        candidate_paths+=("${scan_paths[index]}")
+        candidate_caches+=("$scan_dir/$index")
+      else
+        rm -rf -- "$scan_dir/$index"
+        record_file "${scan_paths[index]}" "$status" "$before" "$after"
+      fi
     else
-      echo "Error: dry-run scan failed: ${scan_paths[index]}" >&2
+      echo "Error: scan failed: ${scan_paths[index]}" >&2
       record_file "${scan_paths[index]}" 1 "" ""
     fi
     unset 'scan_pids[index]'
   done
   scan_paths=()
 }
+
+compress_candidates() {
+  local index signature
+  (( ${#candidate_paths[@]} )) || return 0
+  printf 'Compressing batch: %s eligible files.\n' "${#candidate_paths[@]}"
+  for index in "${!candidate_paths[@]}"; do
+    probe_cache="${candidate_caches[index]}"
+    probe_source="${candidate_paths[index]}"
+    if [[ "$platform" == Darwin ]]; then
+      signature=$(stat -f '%z:%m:%c:%i' "$probe_source") || signature=
+    else
+      signature=$(stat -c '%s:%y:%z:%i' -- "$probe_source") || signature=
+    fi
+    if [[ "$signature" != "$(cat "$probe_cache/signature")" ]]; then
+      probe_cache=
+    fi
+    process_file "$probe_source"
+    rm -rf -- "${candidate_caches[index]}"
+  done
+  candidate_paths=()
+  candidate_caches=()
+  probe_cache=
+  probe_source=
+}
+
+candidate_paths=()
+candidate_caches=()
+scan_index=0
+echo "Scanning with 4 workers..."
 
 if "$recursive"; then
   find "$target" -type f -print0 > "$files" || exit 1
@@ -568,19 +627,33 @@ while IFS= read -r -d '' file; do
     mp4|mov|mkv|webm|m4v|avi|mpg|mpeg|ts|mts|m2ts) ;;
     *) continue ;;
   esac
-  if "$dry_run"; then
-    index=${#scan_pids[@]}
-    scan_paths[index]="$file"
-    (
-      inspect_file "$file"
-      printf '%s:%s:%s\n' "$status" "$before" "$after" > "$scan_dir/$index"
-    ) </dev/null &
-    scan_pids[index]=$!
-    if (( ${#scan_pids[@]} == 4 )); then collect_scans; fi
-  else
-    process_file "$file"
+  index=$scan_index
+  scan_index=$((scan_index + 1))
+  mkdir "$scan_dir/$index"
+  scan_paths[index]="$file"
+  (
+    probe_cache="$scan_dir/$index"
+    probe_source="$file"
+    if [[ "$platform" == Darwin ]]; then
+      stat -f '%z:%m:%c:%i' "$file" > "$probe_cache/signature"
+    else
+      stat -c '%s:%y:%z:%i' -- "$file" > "$probe_cache/signature"
+    fi
+    scan_only=true
+    inspect_file "$file"
+    printf '%s:%s:%s\n' "$status" "$before" "$after" > "$probe_cache/result"
+  ) </dev/null &
+  scan_pids[index]=$!
+  if (( ${#scan_pids[@]} == 4 )) ||
+    { ! "$dry_run" && (( ${#candidate_paths[@]} + ${#scan_pids[@]} == 10 )); }; then
+    collect_scans
+    if ! "$dry_run" && (( ${#candidate_paths[@]} == 10 )); then
+      compress_candidates
+      echo "Resuming scan with 4 workers..."
+    fi
   fi
 done < "$files"
-if "$dry_run"; then collect_scans; fi
+collect_scans
+if ! "$dry_run"; then compress_candidates; fi
 print_report
 [[ "$failed" == 0 ]]

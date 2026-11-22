@@ -128,3 +128,5 @@ git -C "$HOME/.local/share/video-compress" pull --ff-only
 ```
 
 If you cloned elsewhere, run that pull in your checkout instead. Standalone copies cannot self-update and must be installed from a Git clone.
+
+Directory runs scan up to four files concurrently until ten eligible videos are found, pause scanning to compress that batch, then resume scanning. The final batch can contain fewer than ten videos. The scan checks skip rules and caches input metadata. Eligible videos are then compressed one at a time using that metadata. If a candidate changes after scanning, its metadata is read again. Single-file runs start directly.

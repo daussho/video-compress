@@ -29,8 +29,10 @@ class HardwareTests(unittest.TestCase):
         self.tool("uname", "#!/bin/sh\necho Linux\n")
         self.tool("stat", '''#!/usr/bin/env python3
 import pathlib, sys
-assert sys.argv[1:3] == ['-c%s', '--']
-print(pathlib.Path(sys.argv[-1]).stat().st_size)
+assert sys.argv[1:3] in (['-c%s', '--'], ['-c', '%s:%y:%z:%i'])
+info = pathlib.Path(sys.argv[-1]).stat()
+print(info.st_size if sys.argv[1] == '-c%s' else
+      f'{info.st_size}:{info.st_mtime_ns}:{info.st_ctime_ns}:{info.st_ino}')
 ''')
         self.tool("ffmpeg", '''#!/usr/bin/env python3
 import json, os, pathlib, sys
@@ -345,6 +347,62 @@ exit 255
         row = next(line for line in result.stdout.splitlines() if line.startswith('candidate'))
         self.assertEqual(row.split()[:4], ['candidate', '50.00', '-', '-'])
         self.assertTrue(self.source.exists())
+
+    def test_normal_batch_scans_in_parallel_and_reuses_metadata(self):
+        nested = self.root / 'nested'
+        nested.mkdir()
+        second = nested / 'second.mp4'
+        with second.open('wb') as file:
+            file.truncate(50 * 1024 * 1024)
+        markers = self.root / 'probe-markers'
+        markers.mkdir()
+        self.env['PARALLEL_PROBE_DIR'] = str(markers)
+        # A repeated video metadata query would fail, catching cache misses.
+        probe = self.tools / 'ffprobe'
+        probe.write_text(probe.read_text().replace(
+            "(markers / pathlib.Path(args[-1]).name).touch()",
+            "marker = markers / pathlib.Path(args[-1]).name\n"
+            "    if marker.exists():\n"
+            "        sys.exit(1)\n"
+            "    marker.touch()"
+        ))
+        result = subprocess.run(
+            ['/bin/bash', str(ROOT / 'compress.sh'), '--recursive', str(self.root)],
+            env=self.env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Compressing batch: 2 eligible files.', result.stdout)
+        self.assertIn('Summary: 2 compressed', result.stdout)
+        self.assertTrue((nested / 'second_out.mp4').exists())
+        self.assertTrue((self.root / 'video_out.mp4').exists())
+
+    def test_batch_compresses_ten_candidates_before_resuming_scan(self):
+        # Log metadata scans with encode calls to verify phase boundaries.
+        probe = self.tools / 'ffprobe'
+        probe.write_text(probe.read_text().replace(
+            "entry = args[args.index('-show_entries') + 1]",
+            "entry = args[args.index('-show_entries') + 1]\n"
+            "if entry == 'stream=width,height,pix_fmt,bit_rate':\n"
+            "    with open(os.environ['CALL_LOG'], 'a') as log:\n"
+            "        log.write(__import__('json').dumps(['scan', args[-1]]) + '\\n')"
+        ))
+        for number in range(12):
+            with (self.root / f'clip-{number}.mp4').open('wb') as file:
+                file.truncate(50 * 1024 * 1024)
+        result = subprocess.run(
+            ['/bin/bash', str(ROOT / 'compress.sh'), str(self.root)],
+            env=self.env, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        events = [call for call in calls if call[0] == 'scan' or
+                  ('-i' in call and 'lavfi' not in call)]
+        phases = ['scan' if call[0] == 'scan' else 'encode' for call in events]
+        self.assertEqual(phases, ['scan'] * 10 + ['encode'] * 10 +
+                         ['scan'] * 3 + ['encode'] * 3)
+        self.assertIn('Compressing batch: 10 eligible files.', result.stdout)
+        self.assertIn('Compressing batch: 3 eligible files.', result.stdout)
+        self.assertIn('Summary: 13 compressed', result.stdout)
 
     def test_dry_run_batch_recursion_and_unknown_estimate_reset(self):
         unknown = self.root / 'unknown.mp4'
