@@ -220,6 +220,64 @@ print({'stream=codec_name': 'h264',
                 self.assertTrue(self.source.exists())
                 self.assertFalse((self.root / 'video_out.mp4').exists())
 
+    def test_insufficient_savings_cache_skips_repeat_and_invalidates(self):
+        import hashlib
+        self.env['LARGE_OUTPUT'] = '1'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cache = self.root / '.vcompress-skips.json'
+        data = json.loads(cache.read_text())
+        key = hashlib.sha256(b'video.mp4').hexdigest()
+        self.assertEqual(list(data['files']), [key])
+        self.assertNotIn('video.mp4', cache.read_text())
+        self.assertEqual(data['files'][key]['reason'], 'insufficient_savings')
+        self.log.unlink()
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('previous compression saved below 20%', result.stdout)
+        self.assertEqual(len(calls), 1)  # Only the startup GPU probe.
+        self.source.touch()
+        self.log.unlink()
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 2)
+        # Different encoder settings invalidate the previous result.
+        self.env['PROBE_OK'] = '0'
+        self.log.unlink()
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('libx264', calls[-1])
+
+    def test_concurrent_skip_cache_writers_preserve_both_entries(self):
+        second = self.root / 'second.mp4'
+        with second.open('wb') as file:
+            file.truncate(50 * 1024 * 1024)
+        self.env['LARGE_OUTPUT'] = '1'
+        processes = [subprocess.Popen(
+            ['/bin/bash', str(ROOT / 'compress.sh'), str(source)],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        ) for source in (self.source, second)]
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=15)
+            self.assertEqual(process.returncode, 0, stderr)
+        data = json.loads((self.root / '.vcompress-skips.json').read_text())
+        self.assertEqual(len(data['files']), 2)
+
+    def test_dry_run_does_not_write_persistent_skips(self):
+        self.env['LARGE_OUTPUT'] = '1'
+        result, calls = self.run_compress('--dry-run')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / '.vcompress-skips.json').exists())
+
+    def test_corrupt_skip_cache_remains_retryable(self):
+        cache = self.root / '.vcompress-skips.json'
+        cache.write_text('broken json')
+        self.env['LARGE_OUTPUT'] = '1'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('actual savings below 20%', result.stdout)
+        self.assertEqual(cache.read_text(), 'broken json')
+
     def test_failed_probe_uses_software(self):
         self.env['PROBE_OK'] = '0'
         result, calls = self.run_compress()

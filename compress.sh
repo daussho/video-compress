@@ -177,6 +177,16 @@ elif [[ "$platform" == Linux ]]; then
     fi
   done
 fi
+skip_root="$target"
+[[ -d "$skip_root" ]] || skip_root=$(dirname "$target")
+skip_root=$(cd "$skip_root" && pwd -P)
+skip_settings="v1:$encoder:600k:480p:30fps:crf28:ultrafast:min$min_savings:${vaapi_device:-}:${LIBVA_DRIVER_NAME:-}"
+skip_cache_enabled=false
+if command -v python3 >/dev/null; then
+  skip_cache_enabled=true
+else
+  echo "Warning: Python 3 unavailable; persistent skip records disabled." >&2
+fi
 ffmpeg_log=(-hide_banner -loglevel error -stats)
 if "$verbose"; then ffmpeg_log=(); fi
 encode_video() {
@@ -225,6 +235,77 @@ valid_video() {
     -show_entries stream=codec_name -of csv=p=0 "$1") && [[ -n "$codec" ]]
 }
 
+# Cache entries contain a SHA-256 relative-path key, never the filename itself.
+skip_record() {
+  python3 - "$skip_root" "$skip_settings" "$@" <<'PY'
+import fcntl
+import hashlib
+import json
+import os
+import sys
+import tempfile
+
+root, settings, action, source = sys.argv[1:5]
+cache = os.path.join(root, ".vcompress-skips.json")
+key = hashlib.sha256(os.fsencode(os.path.relpath(os.path.realpath(source), root))).hexdigest()
+
+def identity():
+    stat = os.stat(source, follow_symlinks=False)
+    return dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns,
+                ctime_ns=stat.st_ctime_ns, device=stat.st_dev, inode=stat.st_ino)
+
+def read_cache():
+    if os.path.islink(cache):
+        raise ValueError("refusing a symlink cache")
+    try:
+        with open(cache, encoding="utf-8") as stream:
+            data = json.load(stream)
+    except FileNotFoundError:
+        return {"version": 1, "files": {}}
+    if data.get("version") != 1 or not isinstance(data.get("files"), dict):
+        raise ValueError("unsupported skip cache")
+    return data
+
+try:
+    current = identity()
+    if action == "check":
+        entry = read_cache()["files"].get(key, {})
+        # Modification time and size survive moving the complete target directory.
+        matches = all(entry.get(field) == current[field] for field in ("size", "mtime_ns"))
+        if matches and entry.get("settings_id") == settings:
+            print("skip")
+        else:
+            print(json.dumps(current))
+    else:
+        original = json.loads(sys.argv[5])
+        if original != current:
+            sys.exit(0)
+        # Lock the directory so concurrent writers merge against the newest cache.
+        directory = os.open(root, os.O_RDONLY)
+        try:
+            fcntl.flock(directory, fcntl.LOCK_EX)
+            data = read_cache()
+            data["files"][key] = dict(size=current["size"], mtime_ns=current["mtime_ns"],
+                                      settings_id=settings, output_size=int(sys.argv[6]),
+                                      reason="insufficient_savings")
+            fd, temporary = tempfile.mkstemp(prefix=".vcompress-skips-", dir=root)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(data, stream, indent=2, sort_keys=True)
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, cache)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+        finally:
+            os.close(directory)
+except (OSError, ValueError, TypeError, AttributeError) as error:
+    print(f"Warning: skip cache unavailable: {error}", file=sys.stderr)
+PY
+}
+
 # Each scan owns a cache directory. Cache only input metadata, never output checks.
 ffprobe() {
   local entry= argument previous= cache_file result
@@ -253,7 +334,7 @@ ffprobe() {
 compress_video() {
   local f="$1" out part start source_size video_info width height pixel_format bitrate
   local duration audio_info audio_bitrate audio_type filters output_size output_info
-  local output_width output_height output_bitrate elapsed encode_status
+  local output_width output_height output_bitrate elapsed encode_status skip_identity=
   case "${f##*/}" in
     *_out.*|*.part.*) echo "Skipped generated file: $f"; return 2 ;;
   esac
@@ -281,6 +362,13 @@ compress_video() {
   if (( source_size < 50 * 1024 * 1024 )); then
     echo "Skipped: file smaller than 50 MiB: $f"
     return 2
+  fi
+  if "$skip_cache_enabled"; then
+    skip_identity=$(skip_record check "$f")
+    if [[ "$skip_identity" == skip ]]; then
+      echo "Skipped: previous compression saved below ${min_savings}%: $f"
+      return 2
+    fi
   fi
   if ! video_info=$(ffprobe -v error -select_streams v:0 \
     -show_entries stream=width,height,pix_fmt,bit_rate -of csv=p=0 "$f"); then
@@ -400,6 +488,9 @@ compress_video() {
   fi
   output_size=$(file_size "$part") || return 1
   if (( output_size * 100 > source_size * (100 - min_savings) )); then
+    if "$skip_cache_enabled" && [[ -n "$skip_identity" ]]; then
+      skip_record save "$f" "$skip_identity" "$output_size"
+    fi
     rm -- "$part" || return 1
     echo "Skipped: actual savings below ${min_savings}%, original kept: $f"
     return 2
