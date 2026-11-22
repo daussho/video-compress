@@ -196,7 +196,7 @@ print({'stream=codec_name': 'h264',
         self.assertNotIn('-hwaccel', calls[2])
         self.assertIn('h264_vaapi', calls[2])
         self.assertEqual(calls[2][calls[2].index('-vf') + 1],
-                         'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+                         'scale=w=-2:h=480,format=nv12,hwupload')
         self.assertIn('retrying with CPU decoding', result.stderr)
         self.assertEqual((self.root / 'video_out.mp4').read_bytes(), b'encoded video')
         self.assertFalse(self.source.exists())
@@ -241,7 +241,20 @@ print({'stream=codec_name': 'h264',
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(self.source.exists())
         self.assertFalse((self.root / 'video_out.mp4').exists())
-        self.assertEqual(len(calls), 3)  # No libx264 retry after both VA-API paths fail.
+        self.assertEqual(len(calls), 4)  # Both VA-API attempts and the CPU fallback.
+
+    def test_failed_vaapi_encoding_retries_full_cpu_pipeline(self):
+        self.tool("ffmpeg", (self.tools / "ffmpeg").read_text().replace(
+            "if os.environ['ENCODE_OK'] != '1':",
+            "if 'h264_vaapi' in args and 'lavfi' not in args:"
+        ))
+        self.env['DECODE_STATUS'] = '1'
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('libx264', calls[-1])
+        self.assertNotIn('-vaapi_device', calls[-1])
+        self.assertEqual(calls[-1][calls[-1].index('-vf') + 1], 'scale=-2:480')
+        self.assertTrue((self.root / 'video_out.mp4').exists())
 
     def test_vaapi_interrupt_does_not_retry_or_continue_batch(self):
         second = self.root / 'second.mp4'

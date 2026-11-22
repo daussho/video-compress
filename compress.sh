@@ -339,15 +339,26 @@ compress_video() {
       case "$encode_status" in 130|255) interrupt_batch ;; esac
       echo "VA-API hardware decoding/filtering failed; retrying with CPU decoding: $f" >&2
       filters=(-vf 'format=nv12,hwupload')
-      (( height <= 480 )) || filters=(-vf 'format=nv12,hwupload,scale_vaapi=w=-2:h=480')
+      (( height <= 480 )) || filters=(-vf 'scale=w=-2:h=480,format=nv12,hwupload')
       if encode_video "$duration" -nostdin -y -vaapi_device "$vaapi_device" -i "$f" \
         -map 0:v:0 -map '0:a:0?' -c:v h264_vaapi -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
         :
       else
         encode_status=$?
         case "$encode_status" in 130|255) interrupt_batch ;; esac
-        echo "Error: compression failed: $f" >&2
-        return 1
+        echo "VA-API encoding failed; retrying with CPU decoding, scaling, and encoding: $f" >&2
+        filters=()
+        (( height <= 480 )) || filters=(-vf "scale=-2:480")
+        if encode_video "$duration" -nostdin -y -i "$f" -map 0:v:0 -map '0:a:0?' \
+          -c:v libx264 -preset ultrafast -b:v 600k -fpsmax 30 \
+          "${filters[@]}" -c:a copy "$part"; then
+          :
+        else
+          encode_status=$?
+          case "$encode_status" in 130|255) interrupt_batch ;; esac
+          echo "Error: compression failed: $f" >&2
+          return 1
+        fi
       fi
     fi
   else
