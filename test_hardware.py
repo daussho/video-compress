@@ -141,6 +141,33 @@ print({'stream=codec_name': 'h264',
         self.assertTrue(self.source.exists())
         self.assertFalse(list(self.root.glob("*_out*")))
 
+    def test_videotoolbox_filter_failure_retries_with_cpu_frames(self):
+        self.tool("uname", "#!/bin/sh\necho Darwin\n")
+        self.tool("stat", """#!/usr/bin/env python3
+import pathlib, sys
+if sys.argv[1] == '-f%z':
+    print(pathlib.Path(sys.argv[-1]).stat().st_size)
+elif sys.argv[1:3] == ['-f', '%SB']:
+    print('01/01/2020 00:00:00')
+else:
+    print('test identity')
+""")
+        self.tool("SetFile", "#!/bin/sh\nexit 0\n")
+        ffmpeg = self.tools / "ffmpeg"
+        ffmpeg.write_text(ffmpeg.read_text().replace(
+            "print('h264_vaapi')", "print('h264_videotoolbox')"))
+        self.env["DECODE_STATUS"] = "1"
+        result, calls = self.run_compress()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("retrying with CPU decoding and scaling", result.stderr)
+        encodes = [call for call in calls if '-i' in call]
+        self.assertEqual(len(encodes), 2)
+        self.assertIn('-hwaccel', encodes[0])
+        self.assertNotIn('-hwaccel', encodes[1])
+        self.assertIn('scale=-2:480,format=nv12', encodes[1])
+        self.assertIn('h264_videotoolbox', encodes[1])
+        self.assertFalse(self.source.exists())
+
     def test_vaapi_encoding_and_gpu_downscaling(self):
         original_time = 1577836800
         os.utime(self.source, (original_time, original_time))

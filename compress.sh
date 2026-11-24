@@ -427,10 +427,24 @@ compress_video() {
   printf 'Compressing: %s\n' "$f"
   if [[ "$encoder" == h264_videotoolbox ]]; then
     (( height <= 480 )) || filters=(-vf "scale_vt=-2:480")
-    if ! encode_video "$duration" -nostdin -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
+    if encode_video "$duration" -nostdin -xerror -y -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i "$f" \
       -map 0:v:0 -map '0:a:0?' -c:v h264_videotoolbox -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
-      echo "Error: compression failed: $f" >&2
-      return 1
+      :
+    else
+      encode_status=$?
+      case "$encode_status" in 130|255) interrupt_batch ;; esac
+      echo "VideoToolbox hardware decoding/filtering failed; retrying with CPU decoding and scaling: $f" >&2
+      filters=(-vf 'format=nv12')
+      (( height <= 480 )) || filters=(-vf 'scale=-2:480,format=nv12')
+      if encode_video "$duration" -nostdin -y -i "$f" \
+        -map 0:v:0 -map '0:a:0?' -c:v h264_videotoolbox -b:v 600k -fpsmax 30 -tag:v avc1 "${filters[@]}" -c:a copy "$part"; then
+        :
+      else
+        encode_status=$?
+        case "$encode_status" in 130|255) interrupt_batch ;; esac
+        echo "Error: compression failed: $f" >&2
+        return 1
+      fi
     fi
   elif [[ "$encoder" == h264_vaapi ]]; then
     # VA-API decoders use NV12 surfaces for ordinary 8-bit 4:2:0 video.

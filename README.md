@@ -63,6 +63,8 @@ Failures do not stop the batch. The final table lists each video's status, origi
 
 Press Ctrl+C to stop the batch and print the results so far. The active file is marked interrupted, and the command exits with status 130. An interrupted encode may leave a temporary output.
 
+On macOS, a failed VideoToolbox decode or filter pass retries with CPU decoding and scaling, feeding NV12 frames to the VideoToolbox encoder. Ctrl+C stops the batch without retrying.
+
 ## GPU diagnostics
 
 Run `vcompress --check-gpu` to test H.264 hardware encoding, hardware decoding, scaling, and the complete pipeline. It uses a generated temporary sample and removes it when the check ends. On Linux it shows the VA-API device. Failed stages show FFmpeg's error output and exit with status 1. All stages must pass for exit status 0.
